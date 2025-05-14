@@ -1,0 +1,9 @@
+project:
+  output-dir: _docs
+
+website:
+  title: "DataTalks"
+  site-url: "https://ninjalabo.github.io/DataTalks"
+  description: "DataTalks demo"
+  repo-branch: main
+  repo-url: "https://github.com/ninjalabo/DataTalks"
