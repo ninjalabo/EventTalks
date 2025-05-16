@@ -6,6 +6,10 @@
 This file will become your README and also the index of your
 documentation.
 
+# Project KANBAN
+
+https://github.com/orgs/ninjalabo/projects/14
+
 ## Developer Guide
 
 If you are new to using `nbdev` here are some useful pointers to get you
