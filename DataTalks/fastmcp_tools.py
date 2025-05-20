@@ -84,4 +84,7 @@ async def arena_weather():
 
 
 # %% auto 0
-__all__ = ['MCP', 'weather_now', 'route_walk', 'route_bike', 'route_pt', 'route_car', 'parking_live', 'arena_weather']
+__all__ = ['MCP', 'weather_now', 'route_walk', 'route_bike', 'route_pt', 'route_car', 'parking_live', 'arena_weather', 'app']
+
+# Expose ASGI application for use with servers like uvicorn
+app = MCP.sse_app()

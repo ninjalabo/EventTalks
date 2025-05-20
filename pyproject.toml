@@ -15,23 +15,22 @@ requires-python=">=3.9"
 
 # Runtime deps (only what the package needs to *run*, not to *develop*)
 dependencies = [
-  "httpx>=0.26",
-  "pydantic>=2.7",
-  "python-dotenv>=1.0",
-  "polyline>=2.0"
+  "httpx",
+  "pydantic",
+  "python-dotenv",
+  "polyline"
 ]
 
 [project.optional-dependencies]
 dev = [
-  "nbdev>=2.3",
-  "pytest>=8.0",
-  "pytest-asyncio>=0.23",
+  "nbdev",
+  "pytest",
+  "pytest-asyncio",
   "ruff", "black",
   "httpx", "pydantic",
   "python-dotenv",
   "fastmcp",
-  "agents",
-  "python-fasthtml"
+  "openai-agents>=0.3"
 ]
 
 # ────────────────────────────────────────────────────────────────────────────
