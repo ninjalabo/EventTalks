@@ -16,6 +16,8 @@ from sse_starlette.sse import EventSourceResponse
 from .parking_tools import parking_status, nearest_parking_ids
 from agents import Agent, Runner
 from agents.mcp import MCPServerSse
+from fasthtml.common import (Body, Button, Div, Form, Group, H1, H2, Input,
+                             Link, NotStr, Script, Style)
 
 
 # %% auto 0
@@ -33,12 +35,21 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 # ── FastHTML shell with Tailwind + HTMX + SSE ext ─────────────────────────
 app_html = FastHTML(
     hdrs=(
-        '<script src="https://cdn.tailwindcss.com"></script>',
-        '<script src="https://cdn.jsdelivr.net/npm/daisyui@4/dist/full.min.js"></script>',
-        '<script src="https://unpkg.com/htmx.org@1.9.10/dist/htmx.min.js"></script>',
-        '<script src="https://unpkg.com/htmx-ext-sse@2.2.3/dist/sse.js"></script>',
-    ),
+        Script(src="https://cdn.tailwindcss.com"),
+
+        # daisyUI (optional)
+        Script(src="https://cdn.jsdelivr.net/npm/daisyui@4.10.2/dist/full.min.js"),
+
+        # HTMX SSE extension (HTMX core auto-injected via live=True)
+        Script(src="https://unpkg.com/htmx-ext-sse@2.2.3/dist/sse.js"),
+
+        # Adaptive Cards Web Component
+        Script(src="https://unpkg.com/adaptivecards@2.8.0/dist/adaptivecards.min.js"),
+        # Adaptive Cards Web Component
+        Script(src="https://unpkg.com/adaptivecards@2.8.0/dist/adaptivecards-webcomponent.js"),
+    ),  # close hdrs tuple
     live=True,
+    html_attrs={"data-theme": "dark", "class": "bg-gray-50 text-gray-700"},
 )
 
 # FastAPI wrapper so uvicorn can find the ASGI app
@@ -69,12 +80,16 @@ def _chat_bubble(idx: int, **hx):
 
 def _chat_input():
     return Input(
-        id="msgin", name="msg", type="text", autocomplete="off",
+        id="msgin",                    
+        name="msg",
+        type="text",
+        autocomplete="off",
         placeholder="Type your question…",
         cls="input input-bordered w-full",
-        hx_swap_oob="true",
+        hx_swap_oob="true",             
         onkeyup="event.key==='Enter' && this.form.requestSubmit()",
     )
+
 
 
 # %% ../nbs/04_arena_agent.ipynb 6
@@ -90,11 +105,13 @@ async def home():
             Div(_chat_input(),
                 Button("Send ✈", cls="btn btn-primary ml-2"),
                 cls="flex"),
-            hx_post="/send", hx_target="#chatlog", hx_swap="beforeend",
+            hx_post="/send",          
+            hx_target="#chatlog",
+            hx_swap="beforeend",
         ),
         cls="max-w-2xl mx-auto p-6",
     )
-    return ui             # FastHTML wraps it with <html> & scripts
+    return ui
 
 
 # %% ../nbs/04_arena_agent.ipynb 7
@@ -147,19 +164,58 @@ async def send(request: Request):
 
 # %% ../nbs/04_arena_agent.ipynb 9
 #| eval: false
-# ── /stream/{idx} endpoint (SSE) ──────────────────────────────────────────
+# arena_agent.py  ── only the SSE helpers + endpoint changed
+# ------------------------------------------------------------------
+import json
+from starlette.responses import StreamingResponse     # ← instead of EventSourceResponse
+...
+
+# ── helpers --------------------------------------------------------
+def _sse(event: str, payload: str) -> str:
+    """
+    Return one correctly-formatted Server-Sent-Events block.
+
+    Each logical message must be terminated with a *blank* line, otherwise
+    the browser keeps buffering and the event never reaches the JS side.
+    """
+    # HTMX’ sse.js is happy with plain HTML, so we don’t wrap in JSON here.
+    body = "\n".join(f"data: {line}" for line in payload.splitlines())
+    return f"event: {event}\n{body}\n\n"
+
+
+async def _stream_reply(idx: int) -> AsyncIterator[str]:
+    """Generate the assistant’s reply as an SSE stream for one chat bubble."""
+    # ── find the user prompt that precedes this assistant placeholder ──
+    async with MSG_LOCK:
+        if idx <= 0 or idx >= len(MSG):
+            return                                       # nothing to stream
+        prompt_html = MSG[idx - 1]["content"]
+
+    # ── run the LLM agent ─────────────────────────────────────────────
+    reply_html = await _assistant_html(prompt_html)
+
+    # ── persist the reply so a page reload shows the whole history ────
+    async with MSG_LOCK:
+        MSG[idx]["content"] = reply_html
+
+    # ── 1) send it as a “message” event for htmx-ext-sse to swap in ───
+    yield _sse("message", reply_html)
+
+    # ── 2) immediately tell htmx to close the EventSource connection ─
+    yield "event: close\ndata:\n\n"
+
+
+# ── /stream/{idx} endpoint (SSE) ------------------------------------------
 @app_html.get("/stream/{idx}")
 async def stream(idx: int):
-    async def gen() -> AsyncIterator[str]:
-        prompt_html = MSG[idx - 1]["content"]            # previous user msg
-        reply_html  = await _assistant_html(prompt_html)
-
-        async with MSG_LOCK:
-            MSG[idx]["content"] = reply_html
-
-        data = json.dumps({"html": reply_html})
-        yield f"event: message\ndata: {data}\n\n"
-        yield "event: close\ndata:\n\n"
-
-    return EventSourceResponse(gen())
+    """
+    Streaming endpoint used by the chat bubbles (`hx-ext="sse"`).
+    HTMX opens the connection, waits for the first “message” event,
+    swaps the payload into the bubble, then receives a “close” event
+    and disposes the EventSource.
+    """
+    return StreamingResponse(
+        _stream_reply(idx),
+        media_type="text/event-stream",     # <- *crucial* for EventSource
+    )
 
