@@ -1,0 +1,42 @@
+services:
+  # ──────────── tool-server (FastMCP + SSE) ───────────────────────────────
+  tools:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file: [.env]
+    command: >
+      uvicorn DataTalks.fastmcp_tools:app
+      --host 0.0.0.0
+      --port 9001
+      --log-level debug
+    ports: ["9001:9001"]
+
+    # let arena know when tools is really up
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9001/health"]
+      interval: 5s
+      retries: 5
+      start_period: 5s
+
+  # ──────────── chat-arena web app (LLM + UI) ─────────────────────────────
+  arena:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file: [.env]
+    depends_on:
+      tools:
+        condition: service_healthy       # wait for the SSE server
+    command: >
+      sh -c "
+        uvicorn DataTalks.arena_agent:app
+        --host 0.0.0.0
+        --port 8000
+        --log-level debug
+        ${ARENA_DEV:+--reload}
+      "
+    environment:
+      PYTHONPATH: /app
+      MCP_URL: http://tools:9001/sse     # arena ➜ tools
+    ports: ["8000:8000"]

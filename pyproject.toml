@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 # ────────────────────────────────────────────────────────────────────────────
 [project]
 name="DataTalks"
-version = "0.0.2"               # ← bump when you tag a release
+version = "0.0.2"
 description = "Multimodal routing chatbot to Metro Areena (nbdev project)"
 authors     = [{name = "Your Name", email = "you@example.com"}]
 readme      = "README.md"
@@ -18,7 +18,8 @@ dependencies = [
   "httpx",
   "pydantic",
   "python-dotenv",
-  "polyline"
+  "polyline",
+  "python-fasthtml"
 ]
 
 [project.optional-dependencies]
@@ -30,14 +31,15 @@ dev = [
   "httpx", "pydantic",
   "python-dotenv",
   "fastmcp",
-]
+  "python-fasthtml",
+  ]
 
 # ────────────────────────────────────────────────────────────────────────────
 # nbdev / setuptools tweaks (kept from the original scaffold)
 # ────────────────────────────────────────────────────────────────────────────
 [tool.nbdev]
 nbs_path = "nbs"
-lib_path = "DataTalks"
+lib_path = "datatalks"
 doc_path = "_proc"
 
 [tool.setuptools.package-data]

@@ -1,0 +1,12 @@
+nbdev>=2.0
+fastmcp>=2.0
+uvicorn[standard]
+fastapi>=0.95.0
+python-fasthtml==0.12.16
+httpx>=0.26
+polyline
+sse-starlette
+pydantic
+python-dateutil
+openai-agents==0.0.14
+openai-agents-mcp==0.0.8

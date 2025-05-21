@@ -1,5 +1,6 @@
 # tests/test_parking.py
-import pytest, httpx, asyncio
+import pytest
+import httpx
 from DataTalks.arena import (
     AREENA,                       # (lat, lon) of Metro Areena
     nearest_parking_ids,
