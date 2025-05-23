@@ -4,24 +4,30 @@
 #| eval: false
 from __future__ import annotations
 import asyncio, html, json, os
-from typing import AsyncIterator, List, Dict
+from typing import AsyncIterator, List, Dict, Tuple, Any
 
 from fastapi import FastAPI, Request, status
 from fastapi.responses import HTMLResponse
 from fasthtml import FastHTML
 from fasthtml.common import Div, Form, Input, Button, H1
 from sse_starlette.sse import EventSourceResponse
-
-
-from .parking_tools import parking_status, nearest_parking_ids
 from agents import Agent, Runner
 from agents.mcp import MCPServerSse
 from fasthtml.common import (Body, Button, Div, Form, Group, H1, H2, Input,
                              Link, NotStr, Script, Style)
+from typing import List
+import datetime
+from dataclasses import dataclass
+import httpx, asyncio, yaml, re
+from functools import lru_cache
+from typing import List, Dict
+from agents import ToolCallItem
+from monsterui.all import Theme 
 
 
 # %% auto 0
-__all__ = ['MCP_URL', 'OPENAI_API_KEY', 'app_html', 'app', 'MSG', 'MSG_LOCK', 'home', 'send', 'stream']
+__all__ = ['MCP_URL', 'OPENAI_API_KEY', 'history', 'EventContext', 'app_html', 'app', 'MSG', 'MSG_LOCK', 'mainAgent_instruction',
+           'LEAFLET_CSS', 'LEAFLET_JS', 'home', 'ToolChatHook', 'send', 'stream', 'open_map']
 
 # %% ../nbs/04_arena_agent.ipynb 2
 #| eval: false
@@ -32,9 +38,26 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
 # %% ../nbs/04_arena_agent.ipynb 3
 #| eval: false
+history: list[dict] = []
+
+# %% ../nbs/04_arena_agent.ipynb 4
+#| eval: false
+@dataclass
+class EventContext:
+    event_date_time: datetime
+    event_title: str
+    event_description: str
+    
+EventContext = EventContext(event_date_time="04.10.2025 12:00:00", 
+                            event_title="Hockey match KIEKKO-ESPOO vs KÄRPÄT", 
+                            event_description=
+                            "Liiga regular-season showdown at Metro Areena • Doors open 11:15 "                        "Sustainable transport encouraged "                                                        "(metro: Urheilupuisto, bike racks outside Gate B).")
+
+# %% ../nbs/04_arena_agent.ipynb 5
+#| eval: false
 # ── FastHTML shell with Tailwind + HTMX + SSE ext ─────────────────────────
 app_html = FastHTML(
-    hdrs=(
+    hdrs=Theme.zinc.headers() + [
         Script(src="https://cdn.tailwindcss.com"),
 
         # daisyUI (optional)
@@ -43,11 +66,7 @@ app_html = FastHTML(
         # HTMX SSE extension (HTMX core auto-injected via live=True)
         Script(src="https://unpkg.com/htmx-ext-sse@2.2.3/dist/sse.js"),
 
-        # Adaptive Cards Web Component
-        Script(src="https://unpkg.com/adaptivecards@2.8.0/dist/adaptivecards.min.js"),
-        # Adaptive Cards Web Component
-        Script(src="https://unpkg.com/adaptivecards@2.8.0/dist/adaptivecards-webcomponent.js"),
-    ),  # close hdrs tuple
+    ],  
     live=True,
     html_attrs={"data-theme": "dark", "class": "bg-gray-50 text-gray-700"},
 )
@@ -57,14 +76,14 @@ app = FastAPI(title="Arena Buddy", docs_url=None)
 app.mount("/", app_html)
 
 
-# %% ../nbs/04_arena_agent.ipynb 4
+# %% ../nbs/04_arena_agent.ipynb 6
 #| eval: false
 # ── In-memory chat log ────────────────────────────────────────────────────
 MSG: List[Dict[str, str]] = []
 MSG_LOCK = asyncio.Lock()
 
 
-# %% ../nbs/04_arena_agent.ipynb 5
+# %% ../nbs/04_arena_agent.ipynb 7
 #| eval: false
 # ── UI helpers ─────────────────────────────────────────────────────────────
 def _chat_bubble(idx: int, **hx):
@@ -92,12 +111,13 @@ def _chat_input():
 
 
 
-# %% ../nbs/04_arena_agent.ipynb 6
+# %% ../nbs/04_arena_agent.ipynb 8
 #| eval: false
 # ── Home page ─────────────────────────────────────────────────────────────
 @app_html.get("/")
 async def home():
     ui = Div(
+        Div(id="toaster", cls="toast toast-top toast-end fixed z-50"),
         H1("Arena Buddy", cls="text-3xl font-bold mb-4"),
         Div(id="chatlog",
             cls="space-y-3 mb-4 h-[70vh] overflow-y-auto bg-base-200 p-4 rounded-box"),
@@ -114,24 +134,162 @@ async def home():
     return ui
 
 
-# %% ../nbs/04_arena_agent.ipynb 7
+# %% ../nbs/04_arena_agent.ipynb 9
 #| eval: false
-# ── LLM helper ─────────────────────────────────────────────────────────────
-async def _assistant_html(prompt: str) -> str:
-    async with MCPServerSse(name="ui", params={"url": MCP_URL}) as srv:
+mainAgent_instruction = f"""
+╭─────────────────────────────────────────────────────────────╮
+│ 🎟  EVENT CONTEXT                                           │
+╰─────────────────────────────────────────────────────────────╯
+• **When**   : {EventContext.event_date_time}
+• **What**   : {EventContext.event_title}
+• **Details**: {EventContext.event_description}
+
+Your single goal → get the user there **on time** with the **lowest possible CO₂** footprint.
+
+────────────────────────────────────────────────────────────────
+HOW TO THINK & RESPOND
+────────────────────────────────────────────────────────────────
+1. **Understand** the latest user message + full history.
+2. **Plan** a short chain-of-thought *silently* (don’t reveal it).
+3. **Pick or mount tools**
+   • If an existing tool fits (e.g. `walk_route`, `bike_route`,
+     `pt_route`, `car_route`, `nearest_parking_ids`, etc.) – call it.
+   • Else call  
+     `quick_mount_openapi("<keywords>")`  
+     then immediately call the needed REST operation.
+4. **Compare modes**  
+   • If any proposed leg is high-carbon (car, taxi, flight),
+     suggest at least one greener alternative and **quantify the saving**
+     (e.g. “Train cuts ≈80 % CO₂ vs car for this distance”).
+5. **Summarise results** in clear bullet points:
+   • departure / arrival time, duration, CO₂ estimate, cost (if known).
+6. **Humour & tone**  
+   • Every 3-4 replies, add a light joke or emoji (PG-13, relevant).
+7. **Car users**  
+   • If the user insists on driving, call
+     `nearest_parking_ids` ➜ `parking_status`
+     and gently remind why public transport is greener.
+8. **Error handling**  
+   • If a tool raises *ToolError* mentioning “API key”,
+     politely ask the user for the key **or** suggest a free workaround.
+9. **Final formatting**
+   • After you have the textual answer, wrap it in a MonsterUI block:
+     ```html
+     <div class="card shadow-lg bg-base-200">
+       … route summary …
+       <button class="btn btn-primary">Open map</button>
+     </div>
+     ```
+   • Use simple MonsterUI / DaisyUI classes (`card`, `btn`, `badge`, …).
+10. **Be concise** – maximum 4-6 sentences + the card.
+
+(You may omit steps that are not relevant to the user’s request.)
+"""
+
+
+
+# %% ../nbs/04_arena_agent.ipynb 10
+#| eval: false
+from agents import Agent, RunContextWrapper, RunHooks, Runner, Tool, Usage, function_tool
+from typing import Callable, Any
+
+class ToolChatHook(RunHooks[None]):
+    """
+    Fires push(msg) on every tool start / end / error so the UI can
+    display a live notification in the chat area.
+    """
+    def __init__(self, push: Callable[[str], None]):
+        self._push = push
+        
+    async def on_start(self, context, agent) -> None:
+        """Called once when the whole agent run begins."""
+        self._push("🤖 _thinking…_")
+
+    async def on_end(self, context, agent, result) -> None:
+        """Called once after the final answer has been produced."""
+        # Nothing fancy for now; you could log token usage here
+        pass        
+        
+
+    async def on_tool_start(self, context, agent, tool) -> None:
+       self._push(f"{tool.name}  started")
+
+    async def on_tool_end(self, context, agent, tool, result) -> None:
+        self._push(f"✔ {tool.name} finished")
+        self._push(f"result: {result}")
+        
+
+    async def on_tool_error(self, context, agent, tool, error) -> None:
+        self._push(f"⚠ {tool.name} failed: {error}")
+
+# %% ../nbs/04_arena_agent.ipynb 11
+#| eval: false
+from collections import deque
+from agents import Agent, Runner, trace
+from agents.mcp import MCPServerSse
+
+async def _assistant_html(user_prompt: str, push: Callable[[str], None]) -> tuple[str, list[str]]:
+    """
+    ①   mount / call tools as needed
+    ②   craft the plain-text answer
+    ③   wrap it in MonsterUI HTML
+    returns (html_block, ["tool: output", …])
+    """
+  
+
+    async with MCPServerSse(name="ui", params={"url": MCP_URL}, client_session_timeout_seconds=30) as srv:
         agent = Agent(
-            "assistant",
-            instructions=(
-                "You help users reach Metro Areena Espoo with the "
-                "lowest-emission mode possible. Use provided tools."
-            ),
-            mcp_servers=[srv]    
+            name="Main Agent",
+            instructions=mainAgent_instruction,
+            mcp_servers=[srv],
+            hooks=ToolChatHook(push),
+            model="o3"
         )
-        res = await Runner.run(starting_agent=agent, input=prompt)
-        return res.final_output
+
+        # ── build the initial input list (first user turn) ───────────────
+        input_items: list = [{"role": "user", "content": user_prompt}]
+
+        with trace(workflow_name="Arena-3-step"):
+            # ①  Mount or use step
+            input_items.append({
+                "role": "system",
+                "content": (
+                    "If no suitable tool exists, call quick_mount_openapi, "
+                    "then the required operation. Summarise the result."
+                ),
+            })
+            res1 = await Runner.run(agent, input_items)
 
 
-# %% ../nbs/04_arena_agent.ipynb 8
+            # ②  Natural-language answer
+            input_items = res1.to_input_list()         
+            res2 = await Runner.run(agent, input_items)
+
+
+            # ③  MonsterUI formatting
+            input_items = res2.to_input_list()
+            input_items.append({
+                "role": "system",
+                "content": (
+                    "Take the previous assistant answer and wrap it in a MonsterUI card.\n"
+        "—  use <div class='card bg-base-300 text-base-100 shadow-lg p-4 space-y-3'>\n"
+        "—  put the answer itself inside <p class='whitespace-pre-wrap'> … </p>\n"
+        "—  try to make every time different cards \n"
+                    "- add funny images connected to hokey, CO2 etc \n"
+        "—  if you need an action, add\n"
+        "     <button class='btn btn-primary' "
+        "             hx-post='/open-map' hx-target='#toaster' hx-swap='afterbegin'>"
+        "Open map 🗺️</button>\n"
+        "Return **HTML only** – no markdown fences, no extra text."
+                ),
+            })
+            res3 = await Runner.run(agent, input_items)
+            
+
+    return res3.final_output
+
+
+# %% ../nbs/04_arena_agent.ipynb 12
 #| eval: false
 # ── /send endpoint ────────────────────────────────────────────────────────
 @app_html.post("/send")
@@ -162,13 +320,9 @@ async def send(request: Request):
     )
 
 
-# %% ../nbs/04_arena_agent.ipynb 9
+# %% ../nbs/04_arena_agent.ipynb 13
 #| eval: false
-# arena_agent.py  ── only the SSE helpers + endpoint changed
-# ------------------------------------------------------------------
-import json
-from starlette.responses import StreamingResponse     # ← instead of EventSourceResponse
-...
+from starlette.responses import StreamingResponse     
 
 # ── helpers --------------------------------------------------------
 def _sse(event: str, payload: str) -> str:
@@ -183,27 +337,34 @@ def _sse(event: str, payload: str) -> str:
     return f"event: {event}\n{body}\n\n"
 
 
-async def _stream_reply(idx: int) -> AsyncIterator[str]:
-    """Generate the assistant’s reply as an SSE stream for one chat bubble."""
-    # ── find the user prompt that precedes this assistant placeholder ──
+async def _stream_reply(idx: int) -> AsyncIterator[str]:  # noqa: C901 – acceptable
     async with MSG_LOCK:
         if idx <= 0 or idx >= len(MSG):
-            return                                       # nothing to stream
-        prompt_html = MSG[idx - 1]["content"]
+            return 
+    prompt_html = MSG[idx - 1]["content"]
 
-    # ── run the LLM agent ─────────────────────────────────────────────
-    reply_html = await _assistant_html(prompt_html)
+    q: asyncio.Queue[str] = asyncio.Queue()
 
-    # ── persist the reply so a page reload shows the whole history ────
-    async with MSG_LOCK:
-        MSG[idx]["content"] = reply_html
+    # push() will be handed to ToolChatHook and to the agent itself
+    def push(msg: str) -> None:  
+        q.put_nowait(_sse("message", msg))
 
-    # ── 1) send it as a “message” event for htmx-ext-sse to swap in ───
-    yield _sse("message", reply_html)
+    async def _run() -> None:
+        try:
+            reply_html = await _assistant_html(prompt_html, push)
+        except Exception as exc:
+            reply_html = f"⚠ Internal error: {exc}"
+        await q.put(_sse("message", reply_html))     # final HTML card
+        await q.put("event: close\ndata:\n\n")       # tell HTMX to close
 
-    # ── 2) immediately tell htmx to close the EventSource connection ─
-    yield "event: close\ndata:\n\n"
+    asyncio.create_task(_run()) 
+    
+    # ⬅️  *this* is what StreamingResponse must consume
+    async def streamer() -> AsyncIterator[str]:
+        while True:                   # blocks until the queue gets data
+            yield await q.get()
 
+    return streamer()                 # ← DON’T forget this!
 
 # ── /stream/{idx} endpoint (SSE) ------------------------------------------
 @app_html.get("/stream/{idx}")
@@ -214,8 +375,56 @@ async def stream(idx: int):
     swaps the payload into the bubble, then receives a “close” event
     and disposes the EventSource.
     """
+    generator = await _stream_reply(idx)   # get the AsyncIterator ✅
+    if generator is None:                  # invalid idx guard
+        return HTMLResponse(
+            status_code=status.HTTP_204_NO_CONTENT
+        )
     return StreamingResponse(
-        _stream_reply(idx),
-        media_type="text/event-stream",     # <- *crucial* for EventSource
+       generator,
+        media_type="text/event-stream",
     )
+
+
+# %% ../nbs/04_arena_agent.ipynb 14
+#| eval: false
+from monsterui.franken import ModalHeader, ModalBody, Modal
+from fastapi.responses import HTMLResponse
+
+import json
+
+LEAFLET_CSS  = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+LEAFLET_JS   = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+
+@app_html.post("/open-map")
+async def open_map(latlngs: list[list[float]] = Form(...)) -> HTMLResponse:
+    """
+    `latlngs` must be a list like [[lat, lon], [lat, lon], …]
+    (HTMX will POST it as a JSON string – see §2 below).
+    """
+    coords_js = json.dumps(latlngs)     # embed safely in <script>
+
+    html = Modal(
+        ModalHeader("Route preview 🗺️"),
+        ModalBody(
+            "<div id='map' class='w-full h-80 rounded-xl'></div>",
+            as_html=True
+        ),
+        open=True,                          # open immediately
+    ).__html__() + f"""
+    <link rel="stylesheet" href="{LEAFLET_CSS}"/>
+    <script src="{LEAFLET_JS}"></script>
+    <script>
+      (function () {{
+        const coords = {coords_js};
+        const map = L.map('map', {{ zoomControl:false }})
+                     .fitBounds(coords);
+        L.tileLayer('https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png',
+                     {{ attribution:'© OSM' }}).addTo(map);
+        L.polyline(coords, {{ color:'#2563eb', weight:5 }}).addTo(map);
+      }})();
+    </script>
+    """
+
+    return HTMLResponse(html, status_code=200, media_type="text/html")
 

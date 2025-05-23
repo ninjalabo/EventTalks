@@ -10,3 +10,4 @@ pydantic
 python-dateutil
 openai-agents==0.0.14
 openai-agents-mcp==0.0.8
+MonsterUI

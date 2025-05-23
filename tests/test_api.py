@@ -1,9 +1,10 @@
-from DataTalks.api import Point
-from DataTalks.api import geocode
-from DataTalks.api import digitransit_pt
+from DataTalks.api_clients import Point
+from DataTalks.api_clients import geocode
+from DataTalks.api_clients import digitransit_pt
 import pytest
 import httpx
-from DataTalks.api import osrm_car
+from DataTalks.api_clients import osrm_car
+
 
 def test_ll(): assert Point(lat=60, lon=25).ll() == "25.0,60.0"
 
