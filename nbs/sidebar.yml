@@ -3,3 +3,4 @@ website:
     contents:
       - index.ipynb
       - 00_core.ipynb
+      - demo_event_page.html
