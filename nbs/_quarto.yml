@@ -19,4 +19,9 @@ website:
   sidebar:
     style: floating
 
+resources:
+  - metro_areena_homepage_screenshot.png
+  - metro_areena_event_calendar_screenshot.png
+  - metro_areena_logo.png
+
 metadata-files: [nbdev.yml, sidebar.yml]

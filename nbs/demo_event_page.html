@@ -1,12 +1,18 @@
-<!-- Espoo Metro Areena - Event Demo page
-
-Purpose: 
-This HTML file is a standalone, static demo created to showcase a potential UI/UX for an event listing page, styled to resemble the Espoo Metro Areena's website. It primarily demonstrates:
-1.  A visual layout for event listings (ice hockey focused).
-2.  A floating "Get here greener and win!" button.
-3.  A pop-up widget triggered by the green button, allowing users to select an event from the displayed list.
-4.  For demo purposes, only the "KIEKKO-ESPOO VS KÄRPÄT" option in the widget is "functional" and should link to EventTalks chatbot interface. -->
-
+<!--
+    Espoo Metro Arena - Event Page Demo
+    This HTML file is a standalone demo showcasing the "Get here greener" feature.
+    It simulates navigation between a homepage view and an event calendar view,
+    both represented by full-page screenshots from real Metro Areena website.
+    
+    1. Displays a screenshot of the Metro Areena homepage by default.
+    2. A header with an image logo and (non-functional except for TAPAHTUMAKALENTERI & AREENA) navigation bar. Navbar is not a screenshot but an HTML element.
+    3. Clicking "TAPAHTUMAKALENTERI" in the header switches to display a screenshot
+       of the Metro Areena event calendar page.
+    4. A floating "Get here greener and win!" button appearing over the currently visible screenshot.
+    5. A pop-up widget, triggered by the green button, allowing users to select an event.
+       The event options are hardcoded in JavaScript.
+    6. For demo purposes, only the "KIEKKO-ESPOO VS KÄRPÄT" option in the widget is "functional".
+-->
 <!DOCTYPE html>
 <html lang="fi">
 <head>
@@ -19,27 +25,40 @@ This HTML file is a standalone, static demo created to showcase a potential UI/U
     <style>
         body {
             font-family: 'Montserrat', sans-serif;
-            background-color: #000000;
+            background-color: #000000; /* Fallback background */
             color: #ffffff;
             margin: 0;
             padding: 0;
             line-height: 1.6;
+            display: flex; 
+            flex-direction: column; 
+            min-height: 100vh; 
         }
 
         /* --- Site Header --- */
         .site-header {
             background-color: #000000;
-            padding: 15px 30px;
+            padding: 10px 30px; 
             display: flex;
             justify-content: space-between;
             align-items: center;
             border-bottom: 1px solid #222;
+            position: sticky; 
+            top: 0; 
+            z-index: 1500; 
         }
-        .site-header .logo-text {
-            font-size: 1.8rem;
-            font-weight: 700;
-            color: #ffffff;
-            text-decoration: none;
+        .site-header .logo-link { 
+            display: inline-block;
+            line-height: 0; 
+        }
+        .site-header .site-logo { 
+            height: 100px; 
+            width: auto; 
+            vertical-align: middle; 
+        }
+        .site-header nav { 
+            display: flex;
+            align-items: center;
         }
         .site-header nav a {
             color: #cccccc;
@@ -48,117 +67,35 @@ This HTML file is a standalone, static demo created to showcase a potential UI/U
             font-size: 0.9rem;
             font-weight: 500;
             text-transform: uppercase;
+            cursor: pointer; 
         }
         .site-header nav a:hover,
-        .site-header nav a.active {
+        .site-header nav a.active-nav-link { 
             color: #00aeef;
         }
 
-        /* --- Main Content Area --- */
-         .main-container {
-            padding: 20px 15px;
-            max-width: 900px; 
-            margin: 0 auto; 
-        }
-        .page-main-title { 
-            font-size: 3rem; 
-            font-weight: 900; 
-            text-align: center; 
-            margin-top: 20px; 
-            margin-bottom: 10px; 
-            text-transform: uppercase; 
-        }
-        .page-subtitle { 
-            font-size: 1.5rem;
-            font-weight: 500;
-            color: #ffffff; 
-            margin-top: 30px;
-            margin-bottom: 20px;
-            padding-bottom: 10px;
-            border-bottom: 2px solid #00aeef; 
-            display: inline-block;
-        }
-        .event-list { 
-            list-style: none; 
-            padding: 0; 
-            margin: 0 auto; 
-        }
-        .event-item-row { 
-            background-color: #1a1a1a; 
-            border-bottom: 1px solid #000; 
-            margin: 0 auto 10px auto; 
-            padding: 20px; 
-            display: flex; 
-            align-items: center; 
-            max-width: 800px;  
-            border-radius: 3px;
-        }        
-        .event-item-row:hover { 
-            background-color: #252525; 
-        }
-        .event-item-row .event-logo { 
-            width: 60px; 
-            height: 60px; 
-            margin-right: 25px; 
-            background-color: #00355A; 
-            display: flex; 
-            align-items: center; 
-            justify-content: center; 
-            border-radius: 4px; 
-            flex-shrink: 0;
-        }
-        .event-item-row .event-logo .logo-placeholder-text { 
-            font-size: 1.5rem; 
-            font-weight: bold; 
-            color: #FFD700; 
-        }
-        .event-item-row .event-details { 
+        .page-content-area {
             flex-grow: 1; 
-            display: flex;
-            flex-direction: column;
-        }
-        .event-item-row .event-title { 
-            font-size: 1.2rem; 
-            font-weight: 700; 
-            color: #ffffff; 
-            margin: 0 0 5px 0; 
-        }
-        .event-item-row .event-date-time { 
-            font-size: 0.95rem; 
-            color: #bbbbbb; 
-            margin: 0; 
-        }
-        .event-item-row .event-description { 
-            font-size: 0.85rem; 
-            color: #888888; 
-            margin-top: 8px; 
-        }
-        .event-item-row .event-actions { 
-            margin-left: 20px; 
-            display: flex;
-            flex-direction: column; 
-            align-items: flex-end; 
-            flex-shrink: 0; 
-        }
-        .event-item-row .placeholder-button { 
-            background-color: #333333; 
-            color: #ffffff;
-            padding: 8px 15px;
-            font-size: 0.8rem;
-            font-weight: 500;
-            text-transform: uppercase;
-            border-radius: 3px;
-            cursor: default; 
-            margin-bottom: 5px; 
-            min-width: 100px; 
-            text-align: center;
-        }
-        .event-item-row .placeholder-button:last-child { 
-            margin-bottom: 0;
+            width: 100%;
         }
 
+        .screenshot-container {
+            width: 100%;
+            text-align: center; 
+        }
 
-        /* --- Floating Button --- */
+        .screenshot-container img {
+            max-width: 100%; 
+            height: auto;   
+            display: block; 
+            margin: 0 auto; 
+            background-color: #111; 
+        }
+
+        #eventCalendarContent {
+            display: none;
+        }
+
         #getGreenerButton {
             position: fixed;
             bottom: 30px;
@@ -181,7 +118,6 @@ This HTML file is a standalone, static demo created to showcase a potential UI/U
             transform: translateY(-2px);
         }
 
-        /* --- Chat Widget Styles --- */
         .chat-widget {
             display: none; 
             position: fixed;
@@ -263,18 +199,26 @@ This HTML file is a standalone, static demo created to showcase a potential UI/U
         }
         
         @media (max-width: 768px) {
-             .site-header { flex-direction: column; padding: 15px; }
-             .site-header .logo-text { margin-bottom: 10px; }
-             .site-header nav a { margin: 0 10px; font-size: 0.8rem; }
-             .page-main-title { font-size: 2.2rem; }
-             .page-subtitle { font-size: 1.2rem; }
-             .main-container { padding: 15px 10px; }
-             .event-item-row { padding: 15px; flex-direction: column; align-items: flex-start; max-width: 100%;}
-             .event-item-row .event-logo { margin-right: 0; margin-bottom: 15px; }
-             .event-item-row .event-details { margin-bottom: 15px; width: 100%; }
-             .event-item-row .event-actions { margin-left: 0; width: 100%; flex-direction: row; justify-content: flex-start; }
-             .event-item-row .placeholder-button { flex-grow: 1; margin-bottom: 0; margin-right: 5px; }
-             .event-item-row .placeholder-button:last-child { margin-right: 0; }
+             .site-header {
+                flex-direction: column;
+                padding: 15px;
+                position: static; 
+             }
+             .site-header .logo-link { 
+                 margin-bottom: 10px;
+             }
+             .site-header .site-logo {
+                 height: 35px; 
+             }
+             .site-header nav {
+                 display: flex;
+                 flex-wrap: wrap;
+                 justify-content: center;
+             }
+             .site-header nav a {
+                 margin: 5px 10px; 
+                 font-size: 0.8rem;
+             }
              #getGreenerButton { padding: 12px 20px; font-size: 0.9em; bottom: 20px; right: 20px; }
              .chat-widget { width: calc(100% - 40px); right: 20px; bottom: 75px; max-height: 60vh; }
         }
@@ -284,79 +228,37 @@ This HTML file is a standalone, static demo created to showcase a potential UI/U
 <body>
 
     <header class="site-header">
-        <a href="#" class="logo-text"><span>METRO</span> AREENA</a>
+        <a href="#" id="navLogo" class="logo-link">
+            <img src="./metro_areena_logo.png" alt="Metro Areena Logo" class="site-logo"
+                 onerror="this.parentElement.innerHTML='<span>METRO</span> AREENA'; this.onerror=null;">
+        </a>
         <nav>
-            <a href="#" class="active">TAPAHTUMAKALENTERI</a>
-            <a href="#">AREENA</a>
-            <a href="#">RAVINTOLAPALVELUT</a>
-            <a href="#">HARJOITUSAREENA</a>
+            <a id="navTapahtumakalenteri" class="active-nav-link">TAPAHTUMAKALENTERI</a>
+            <a id="navAreena">AREENA</a>
+            <a id="navRavintolapalvelut">RAVINTOLAPALVELUT</a>
+            <a id="navHarjoitusareena">HARJOITUSAREENA</a>
         </nav>
     </header>
 
-    <div class="main-container">
-        <h1 class="page-main-title">TAPAHTUMAKALENTERI</h1>
-        <ul class="event-list">
-            <li class="event-item-row" data-event-name="KYLIE MINOGUE">
-                <div class="event-logo"><span class="logo-placeholder-text">★</span></div>
-                <div class="event-details">
-                    <h3 class="event-title">KYLIE MINOGUE</h3>
-                    <p class="event-date-time">23.6.2025, KLO 18:00-23:00</p>
-                </div>
-                 <div class="event-actions">
-                    <div class="placeholder-button buy-tickets">Osta liput</div>
-                    <div class="placeholder-button lisatiedot">Lisätiedot</div>
-                </div>
-            </li>
-            <li class="event-item-row" data-event-name="SUSIJENGI VS PUOLA">
-                <div class="event-logo">
-                    <img src="https://placehold.co/60x60/002A54/FFFFFF?text=SJ&font=montserrat" alt="Susijengi" style="border-radius: 4px;">
-                </div>
-                <div class="event-details">
-                    <h3 class="event-title">SUSIJENGI VS PUOLA</h3>
-                    <p class="event-date-time">21.8.2025, KLO 19:00</p>
-                </div>
-                <div class="event-actions">
-                    <div class="placeholder-button buy-tickets">Osta liput</div>
-                    <div class="placeholder-button lisatiedot">Lisätiedot</div>
-                </div>
-            </li>
-            <li class="event-item-row" data-event-name="KIEKKO-ESPOO VS JYP">
-                <div class="event-logo"><span class="logo-placeholder-text">KE</span></div>
-                <div class="event-details">
-                    <h3 class="event-title">KIEKKO-ESPOO VS JYP</h3>
-                    <p class="event-date-time">19.9.2025, KLO 18:30</p>
-                </div>
-                <div class="event-actions">
-                    <div class="placeholder-button lisatiedot">Lisätiedot</div>
-                </div>
-            </li>
-            <li class="event-item-row" data-event-name="KIEKKO-ESPOO VS SAIPA">
-                <div class="event-logo"><span class="logo-placeholder-text">KE</span></div>
-                <div class="event-details">
-                    <h3 class="event-title">KIEKKO-ESPOO VS SAIPA</h3>
-                    <p class="event-date-time">24.9.2025, KLO 18:30</p>
-                </div>
-                <div class="event-actions">
-                    <div class="placeholder-button lisatiedot">Lisätiedot</div>
-                </div>
-            </li>
-            <li class="event-item-row" data-event-name="KIEKKO-ESPOO VS KÄRPÄT">
-                <div class="event-logo"><span class="logo-placeholder-text">KE</span></div>
-                <div class="event-details">
-                    <h3 class="event-title">KIEKKO-ESPOO VS KÄRPÄT</h3>
-                    <p class="event-date-time">4.10.2025, KLO 18:00</p>
-                </div>
-                <div class="event-actions">
-                    <div class="placeholder-button lisatiedot">Lisätiedot</div>
-                </div>
-            </li>
-        </ul>
+    <div class="page-content-area">
+        <div id="homePageContent" class="screenshot-container">
+            <img src="./metro_areena_homepage_screenshot.png" 
+                 alt="Espoo Metro Areena Homepage Screenshot" 
+                 onerror="this.alt='Error: Homepage screenshot not found. Ensure it is in the nbs/ folder and the name is correct.'; this.src='https://placehold.co/1200x800/000000/FFFFFF?text=Homepage+Screenshot+Missing';">
+        </div>
+
+        <div id="eventCalendarContent" class="screenshot-container">
+            <img src="./metro_areena_event_calendar_screenshot.png" 
+                 alt="Espoo Metro Areena Event Calendar Screenshot"
+                 onerror="this.alt='Error: Event calendar screenshot not found. Ensure it is in the nbs/ folder and the name is correct.'; this.src='https://placehold.co/1200x800/000000/FFFFFF?text=Event+Calendar+Screenshot+Missing';">
+        </div>
     </div>
 
     <button id="getGreenerButton">Get here greener and win!</button>
 
     <div id="chatWidget" class="chat-widget">
         <div class="chat-widget-header">
+            <h3>Mistä lähdetään liikkeelle?</h3> 
             <button class="close-widget-button" id="closeChatWidget">&times;</button>
         </div>
         <div class="chat-widget-content">
@@ -370,14 +272,62 @@ This HTML file is a standalone, static demo created to showcase a potential UI/U
         const chatWidgetEventOptionsList = document.getElementById('chatWidgetEventOptions');
         const closeChatWidgetButton = document.getElementById('closeChatWidget');
         
-        // TODO: should be replaced to link to EventTalks chatbot interface
-        const targetLink = 'https://www.espoo.fi/fi/';
+        const homePageContent = document.getElementById('homePageContent');
+        const eventCalendarContent = document.getElementById('eventCalendarContent');
+        
+        const navLogo = document.getElementById('navLogo');
+        const navTapahtumakalenteri = document.getElementById('navTapahtumakalenteri');
+        const navLinks = document.querySelectorAll('.site-header nav a');
+
+        const targetLink = 'https://www.espoo.fi/'; 
         const functionalEventName = "KIEKKO-ESPOO VS KÄRPÄT";
+
+        const predefinedEvents = [
+            { name: "KYLIE MINOGUE", date: "23.6.2025" },
+            { name: "SUSIJENGI VS PUOLA", date: "21.8.2025" },
+            { name: "KIEKKO-ESPOO VS JYP", date: "19.9.2025" },
+            { name: "KIEKKO-ESPOO VS SAIPA", date: "24.9.2025" },
+            { name: "KIEKKO-ESPOO VS KÄRPÄT", date: "4.10.2025" }
+        ];
+
+        function setActiveNavLink(activeLink) {
+            navLinks.forEach(link => link.classList.remove('active-nav-link'));
+            if (activeLink) {
+                activeLink.classList.add('active-nav-link');
+            }
+        }
+
+        function showHomePage() {
+            homePageContent.style.display = 'block';
+            eventCalendarContent.style.display = 'none';
+            setActiveNavLink(null); 
+        }
+
+        function showEventCalendar() {
+            homePageContent.style.display = 'none';
+            eventCalendarContent.style.display = 'block';
+            setActiveNavLink(navTapahtumakalenteri);
+        }
+
+        showHomePage(); 
+
+        navLogo.addEventListener('click', (e) => {
+            e.preventDefault();
+            showHomePage();
+        });
+
+        navTapahtumakalenteri.addEventListener('click', (e) => {
+            e.preventDefault();
+            showEventCalendar();
+        });
+
+        document.getElementById('navAreena').addEventListener('click', (e) => { e.preventDefault(); showHomePage(); setActiveNavLink(document.getElementById('navAreena'));});
+        document.getElementById('navRavintolapalvelut').addEventListener('click', (e) => { e.preventDefault(); showHomePage(); setActiveNavLink(document.getElementById('navRavintolapalvelut'));});
+        document.getElementById('navHarjoitusareena').addEventListener('click', (e) => { e.preventDefault(); showHomePage(); setActiveNavLink(document.getElementById('navHarjoitusareena'));});
+
 
         function populateEventOptions() {
             chatWidgetEventOptionsList.innerHTML = ''; 
-            const eventItems = document.querySelectorAll('.event-list .event-item-row'); 
-            
             const introMessage = document.createElement('p');
             introMessage.textContent = "Valitse tapahtuma johon olet menossa:";
             introMessage.style.padding = "0 15px 10px";
@@ -385,28 +335,22 @@ This HTML file is a standalone, static demo created to showcase a potential UI/U
             introMessage.style.color = "#cccccc";
             chatWidgetEventOptionsList.appendChild(introMessage);
 
-            eventItems.forEach(item => {
-                const eventNameElement = item.querySelector('.event-title');
-                if (eventNameElement) {
-                    const eventName = eventNameElement.textContent.trim();
-                    const listItem = document.createElement('li');
-                    listItem.textContent = eventName;
-                    
-                    const iconSpan = document.createElement('span');
-                    iconSpan.className = 'option-icon';
-                    iconSpan.innerHTML = '&raquo;'; 
-                    listItem.appendChild(iconSpan);
-
-                    listItem.dataset.eventName = eventName;
-                    
-                    listItem.addEventListener('click', () => {
-                        if (eventName === functionalEventName) {
-                            window.open(targetLink, '_blank');
-                        }
-                        closeWidget();
-                    });
-                    chatWidgetEventOptionsList.appendChild(listItem);
-                }
+            predefinedEvents.forEach(eventData => {
+                const eventName = eventData.name;
+                const listItem = document.createElement('li');
+                listItem.textContent = eventName;
+                const iconSpan = document.createElement('span');
+                iconSpan.className = 'option-icon';
+                iconSpan.innerHTML = '&raquo;'; 
+                listItem.appendChild(iconSpan);
+                listItem.dataset.eventName = eventName;
+                listItem.addEventListener('click', () => {
+                    if (eventName === functionalEventName) {
+                        window.open(targetLink, '_blank');
+                    }
+                    closeWidget();
+                });
+                chatWidgetEventOptionsList.appendChild(listItem);
             });
         }
 

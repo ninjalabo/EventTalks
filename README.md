@@ -6,6 +6,10 @@
 This file will become your README and also the index of your
 documentation.
 
+# Static Demo Event Page
+
+Event demo page: [Espoo Arena Demo Page](demo_event_page.html)
+
 # Project KANBAN
 
 https://github.com/orgs/ninjalabo/projects/14
