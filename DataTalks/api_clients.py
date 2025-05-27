@@ -14,9 +14,9 @@ from dataclasses import dataclass, field
 
 
 # %% auto 0
-__all__ = ['OSRM_URL', 'USER_AGENT', 'HSL_PR_BASE', 'DEFAULT_FACILITY', 'METRO_AREENA_ID', 'Point', 'Mode', 'Step', 'Route',
-           'SegmentEmission', 'TripEmissionEstimate', 'geocode', 'osrm_car', 'osrm_walk', 'osrm_bike', 'digitransit_pt',
-           'hsl_parking_status', 'UtilRow', 'Facility', 'FintrafficParking', 'parking_status']
+__all__ = ['OSRM_URL', 'HSL_PR_BASE', 'DEFAULT_FACILITY', 'METRO_AREENA_ID', 'Point', 'Mode', 'Step', 'Route', 'SegmentEmission',
+           'TripEmissionEstimate', 'osrm_car', 'osrm_walk', 'osrm_bike', 'digitransit_pt', 'hsl_parking_status',
+           'UtilRow', 'Facility', 'FintrafficParking', 'parking_status']
 
 # %% ../nbs/01_api_clients.ipynb 3
 OSRM_URL = "https://router.project-osrm.org/route/v1"        # /driving /cycling /walking
@@ -64,43 +64,8 @@ class TripEmissionEstimate:
     total_distance_m: float
     total_co2e_g: float
 
-# %% ../nbs/01_api_clients.ipynb 6
-import httpx, pydantic
-USER_AGENT = "ArenaBuddy/0.1 ( datatalks@example.com )"
-
-async def geocode(query: str,
-                  *,
-                  countrycodes: str | None = None,
-                  lang: str = "en,fi",
-                  limit: int = 1) -> "Point":
-    """Return the first OpenStreetMap match for *query* (Nominatim)."""
-    params = {
-        "q": query,
-        "format": "jsonv2",          # richer schema than 'json'
-        "limit": limit,
-        "accept-language": lang,
-    }
-    if countrycodes:
-        params["countrycodes"] = countrycodes      # e.g. "fi"
-
-    async with httpx.AsyncClient(
-        timeout=10,
-        headers={"User-Agent": USER_AGENT}
-    ) as cx:
-        r = await cx.get(
-            "https://nominatim.openstreetmap.org/search",
-            params=params,
-        )
-    r.raise_for_status()
-    hits = r.json()
-    if not hits:
-        raise LookupError(f"No location found for '{query}'")
-    j = hits[0]
-    return Point(lat=float(j["lat"]), lon=float(j["lon"]))
-
-
 # %% ../nbs/01_api_clients.ipynb 7
-async def _osrm_route(profile: str, src: Point, dst: Point) -> Route:
+async def _osrm_route(profile: str, src: Point, dst: Point) -> str:
     """
     Generic wrapper around the public OSRM demo server.
     Returns a Route with distance/duration in *metres* / *seconds*.
@@ -112,58 +77,24 @@ async def _osrm_route(profile: str, src: Point, dst: Point) -> Route:
         r = await cx.get(url, params=params)
     r.raise_for_status()
 
-    data = r.json()["routes"][0]
-
-
-    coords = [                     
-    Point(lat=lat, lon=lon)
-    for lat, lon in polyline.decode(data["geometry"])
-]
-
-    # Build turn-by-turn instructions
-    def _instr(step):
-        m = step["maneuver"]
-        parts = [m["type"], m.get("modifier"), step.get("name")]
-        return " ".join(p for p in parts if p)
-
-    steps = [
-        Step(_instr(s), s["distance"], s["duration"])
-        for leg in data["legs"]
-        for s   in leg["steps"]
-    ]
-
-    mode_map: dict[str, Mode] = {
-        "driving": Mode.CAR,
-        "cycling": Mode.BIKE,
-        "walking": Mode.WALK,
-    }
-    
-    return Route(
-        mode       = mode_map[profile],
-        distance_m = data["distance"],
-        duration_s = data["duration"],
-        geometry   = coords,
-        steps      = steps,
-        profile    = profile,
-    )
-
-
+    data = r.json()["routes"][0]    
+    return data
 
 
 # %% ../nbs/01_api_clients.ipynb 8
-async def osrm_car(src: Point, dst: Point) -> Route:
+async def osrm_car(src: Point, dst: Point) -> str:
     """Route for profile **driving** (car)."""
     return await _osrm_route("driving", src, dst)
 
 
 # %% ../nbs/01_api_clients.ipynb 9
-async def osrm_walk(src: Point, dst: Point) -> Route:
+async def osrm_walk(src: Point, dst: Point) -> str:
     """Route for profile **walking** (foot)."""
     return await _osrm_route("walking", src, dst)
 
 
 # %% ../nbs/01_api_clients.ipynb 10
-async def osrm_bike(src: Point, dst: Point) -> Route:
+async def osrm_bike(src: Point, dst: Point) -> str:
     """Route for profile **cycling** (bike)."""
     return await _osrm_route("cycling", src, dst)
 
@@ -197,7 +128,7 @@ async def digitransit_pt(
     dst: Point,
     *,
     dataset: str = "hsl",
-) -> Route:
+) -> str:
     """Fastest PT itinerary between *src* and *dst* via Digitransit Routing v2."""
     url = _DT_URL.replace("hsl", dataset)
 
@@ -229,14 +160,7 @@ async def digitransit_pt(
 
     dist_m = node["walkDistance"] + sum(l["distance"] for l in node["legs"] if l["mode"] != "WALK")
 
-    return Route(
-        mode       = Mode.PT,
-        distance_m = dist_m,
-        duration_s = node["duration"],
-        geometry   = geom,
-        steps      = steps,
-        profile    = "public-transport",
-    )
+    return str
 
 
 
