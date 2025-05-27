@@ -355,32 +355,25 @@ from urllib.parse import quote_plus
 
 def _build_static_map_url(coords: list[tuple[float, float]]) -> str:
     """
-    Build a Geoapify Static-Map URL with the route rendered in bright red.
+    Build a Static-Map URL that Geoapify accepts (geometry=polyline:…).
+    *No* encoding step means shorter but longer URLs; fine for <2 k points.
     """
+    # keep only lon,lat (drop elevation/time if present)
+    clean = [(float(pt[0]), float(pt[1])) for pt in coords if len(pt) >= 2]
 
-    # keep only lon,lat                   (drop elevation/time if present)
-    clean = [(float(x), float(y)) for x, y in coords if len((x, y)) >= 2]
-
-    # polyline:lon1,lat1,lon2,lat2,…
+    # polyline:lon1,lat1,lon2,lat2…
     coord_str = ",".join(f"{lon:.6f},{lat:.6f}" for lon, lat in clean)
-
-    # add stroke colour & width (hex colour must be URL-encoded → %23)
-    geom = (
-        f"polyline:{coord_str}"
-        ";linecolor:%23ff3b3b"     # bright red
-        ";linewidth:5"             # 5 px
-    )
-
-    # encode BUT keep “: , ;” that StaticMaps expects
-    geom_q = quote_plus(geom, safe=":;,")   
+    geom      = f"polyline:{coord_str}"                  # plain-text polyline
+    geom_q    = quote_plus(geom, safe=":,")              # encode ',' ':' but keep them
 
     return (
         "https://maps.geoapify.com/v1/staticmap"
         f"?apiKey={API_KEY}"
         "&style=osm-bright"
         "&width=600&height=400"
-        f"&geometry={geom_q}"
+        f"&geometry={geom_q}"                            # ← FIXED
     )
+
 
 
 # ────────── mcp.tool wrappers (one GET each, no sessions) ──────────────────
@@ -400,9 +393,10 @@ def route_bike(start: str, finish: str) -> str:
 
 @mcp.tool("route_walk")
 def route_walk(start: str, finish: str) -> str:
-    """Pedestrian routing as a static map."""
     result = _route(start, finish, mode="walk")
     return _build_static_map_url(result["coords"])
+
+
 
 
 @mcp.tool("route_public_transport")
