@@ -3,6 +3,17 @@
 # %% auto 0
 __all__ = ['start_parking_worker', 'parking_camera_loop']
 
+# %% ../nbs/08_camera_talk.ipynb 1
+#| eval: false
+import asyncio
+#from DataTalks.arena_agent import parking_camera_loop
+from .fastmcp_tools import app
+import datetime
+import random
+from .arena_agent import parking_q, _sse 
+import logging
+
+
 # %% ../nbs/08_camera_talk.ipynb 2
 #| eval: false
 @app.on_event("startup")
