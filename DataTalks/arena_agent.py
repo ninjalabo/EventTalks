@@ -55,8 +55,8 @@ from agents.mcp import MCPServerSse
 
 # %% auto 0
 __all__ = ['MCP_URL', 'OPENAI_API_KEY', 'LEAFLET_CSS', 'LEAFLET_JS', 'history', 'parking_q', 'EventContext', 'app_html', 'app',
-           'MSG', 'MSG_LOCK', 'mainAgent_instruction', 'home', 'ToolChatHook', 'send', 'stream', 'open_map',
-           'parking_feed']
+           'MSG', 'MSG_LOCK', 'mainAgent_instruction', 'start_parking_loop', 'home', 'ToolChatHook', 'send', 'stream',
+           'open_map', 'parking_feed']
 
 # %% ../nbs/04_arena_agent.ipynb 2
 #| eval: false
@@ -118,12 +118,21 @@ app.mount("/", app_html)
 
 # %% ../nbs/04_arena_agent.ipynb 8
 #| eval: false
+from .camera_talk import parking_camera_loop
+import asyncio
+
+@app.on_event("startup")        
+async def start_parking_loop():
+    asyncio.create_task(parking_camera_loop(), name="parking-loop")
+
+# %% ../nbs/04_arena_agent.ipynb 9
+#| eval: false
 # ── In-memory chat log ────────────────────────────────────────────────────
 MSG: List[Dict[str, str]] = []
 MSG_LOCK = asyncio.Lock()
 
 
-# %% ../nbs/04_arena_agent.ipynb 9
+# %% ../nbs/04_arena_agent.ipynb 10
 #| eval: false
 # ── UI helpers ─────────────────────────────────────────────────────────────
 def _chat_bubble(idx: int, **hx):
@@ -151,7 +160,7 @@ def _chat_input():
 
 
 
-# %% ../nbs/04_arena_agent.ipynb 10
+# %% ../nbs/04_arena_agent.ipynb 11
 #| eval: false
 # ── Home page ─────────────────────────────────────────────────────────────
 @app_html.get("/")
@@ -161,7 +170,9 @@ async def home():
             id="parking-bridge",
             hx_ext="sse",                 # camel-case dash → underscore
             sse_connect="/parking-feed",
-            sse_swap="message",           # listen for the “message” event
+            sse_swap="message", 
+            hx_target="#chatlog", 
+            hx_swap="beforeend", 
             cls="hidden",
         ),
         Div(id="toaster", cls="toast toast-top toast-end fixed z-50"),
@@ -183,7 +194,7 @@ async def home():
     return ui 
 
 
-# %% ../nbs/04_arena_agent.ipynb 11
+# %% ../nbs/04_arena_agent.ipynb 12
 #| eval: false
 #
 ##11. Appx. 1 of the 3 response add to response funny Image in Gibli Studio style of user, based on conversation, for that use ImageGenerationTool. 
@@ -290,7 +301,7 @@ Edit
 
 
 
-# %% ../nbs/04_arena_agent.ipynb 12
+# %% ../nbs/04_arena_agent.ipynb 13
 #| eval: false
 class ToolChatHook(RunHooks[None]):
     """
@@ -324,7 +335,7 @@ class ToolChatHook(RunHooks[None]):
     async def on_tool_error(self, context, agent, tool, error) -> None:
         self._push(f"\n ⚠ {tool.name} failed: {error}")
 
-# %% ../nbs/04_arena_agent.ipynb 13
+# %% ../nbs/04_arena_agent.ipynb 14
 #| eval: false
 async def _assistant_html(user_prompt: str, push: Callable[[str], None]) -> tuple[str, list[str]]:
     """
@@ -346,12 +357,13 @@ async def _assistant_html(user_prompt: str, push: Callable[[str], None]) -> tupl
         hook = ToolChatHook(push)
 
         res = await Runner.run(agent, user_prompt, hooks=hook)
-    
+        history.append({"user": user_prompt})
+        history.append(res)
 
     return res.final_output
 
 
-# %% ../nbs/04_arena_agent.ipynb 14
+# %% ../nbs/04_arena_agent.ipynb 15
 #| eval: false
 # ── /send endpoint ────────────────────────────────────────────────────────
 @app_html.post("/send")
@@ -382,7 +394,7 @@ async def send(request: Request):
     )
 
 
-# %% ../nbs/04_arena_agent.ipynb 15
+# %% ../nbs/04_arena_agent.ipynb 16
 #| eval: false
 # ── helpers --------------------------------------------------------
 def _sse(event: str, payload: str) -> str:
@@ -423,13 +435,14 @@ async def _stream_reply(idx: int) -> AsyncIterator[str] | None:
         async def streamer() -> AsyncIterator[str]:
             while True:                   # blocks until the queue gets data
                 yield await q.get()
+                #yield await parking_q.get()
 
         return streamer()                 # ← DON’T forget this!     
 
 
 
 
-# %% ../nbs/04_arena_agent.ipynb 16
+# %% ../nbs/04_arena_agent.ipynb 17
 #| eval: false
 @app_html.get("/stream/{idx}")
 async def stream(idx: int):
@@ -449,7 +462,7 @@ async def stream(idx: int):
         media_type="text/event-stream",
     )
 
-# %% ../nbs/04_arena_agent.ipynb 17
+# %% ../nbs/04_arena_agent.ipynb 18
 #| eval: false
 @app_html.post("/open-map")
 async def open_map(
@@ -517,7 +530,7 @@ async def open_map(
 
 
 
-# %% ../nbs/04_arena_agent.ipynb 18
+# %% ../nbs/04_arena_agent.ipynb 19
 #| eval: false
 @app_html.get("/parking-feed")
 async def parking_feed():
