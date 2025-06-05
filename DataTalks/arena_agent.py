@@ -17,7 +17,7 @@ from monsterui.all import Theme
 
 import asyncio, datetime, random, html
 from typing import Any, List
-
+from fasthtml.common import NotStr
 from fastapi import FastAPI
 from sse_starlette.sse import EventSourceResponse             # <- your existing SSE helper
 from agents import Agent, Runner
@@ -50,13 +50,40 @@ from agents import Agent, Runner, trace
 from agents.mcp import MCPServerSse
 
 
+import asyncio
+import html
+import json
+import os
+import uuid
+from typing import AsyncIterator, List, Dict, Callable, Any
+
+from fastapi import FastAPI, Request, status, Form as ApiForm, HTTPException
+from fasthtml import FastHTML
+from fasthtml.common import Div, Input, Button, Script
+from fasthtml.common import *
+from monsterui.all import *
+from sse_starlette.sse import EventSourceResponse
+from starlette.responses import StreamingResponse, HTMLResponse
+
+from agents import Agent, Runner, RunHooks
+from agents.mcp import MCPServerSse
+from agents.run import RunResult
+from agents.result import RunResultBase
+from agents.run_context import RunContextWrapper
+from agents.items import ItemHelpers, ResponseFunctionToolCall
+from agents.tool import function_tool
+from collections import deque
+import logging
+logging.basicConfig(level=logging.INFO)
+
 
 
 
 # %% auto 0
-__all__ = ['MCP_URL', 'OPENAI_API_KEY', 'LEAFLET_CSS', 'LEAFLET_JS', 'history', 'parking_q', 'EventContext', 'app_html', 'app',
-           'MSG', 'MSG_LOCK', 'mainAgent_instruction', 'start_parking_loop', 'home', 'ToolChatHook', 'send', 'stream',
-           'open_map', 'parking_feed']
+__all__ = ['MCP_URL', 'OPENAI_API_KEY', 'LEAFLET_CSS', 'LEAFLET_JS', 'history', 'COMMIT_COUNTER', 'TOOL_NAME_MAP', 'parking_q',
+           'EventContext', 'app_html', 'app', 'MSG', 'MSG_LOCK', 'mainAgent_instruction', 'start_parking_loop',
+           'nav_btn', 'home', 'format_tool_message', 'pretty_tool_name', 'ToolChatHook', 'send', 'empty_generator',
+           'stream', 'open_map', 'parking_feed', 'emissions_summary']
 
 # %% ../nbs/04_arena_agent.ipynb 2
 #| eval: false
@@ -73,6 +100,20 @@ LEAFLET_JS  = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
 # %% ../nbs/04_arena_agent.ipynb 4
 #| eval: false
 history: list[dict] = []
+# Just for demo – use Redis/memcached for multi-instance
+COMMIT_COUNTER = {"count": 0}
+TOOL_NAME_MAP = {
+    "route_car": "Car Route 🛻",
+    "route_bike": "Bike Route 🚴",
+    "route_walk": "Walking Route 🚶",
+    "route_public_transport": "Public Transport 🚌",
+    "weather_7_day_weather_forecast_for_coordinates": "Weather Forecast ☁️",
+    "weather_current": "Live Weather 🌤️",
+    "hockey.highlights.get_by_id": "Hockey Highlight 🏒",
+}
+
+#HAS_COMMITTED = {"done": False}
+
 
 # %% ../nbs/04_arena_agent.ipynb 5
 #| eval: false
@@ -96,7 +137,7 @@ EventContext = EventContext(event_date_time="04.10.2025 12:00:00",
 # %% ../nbs/04_arena_agent.ipynb 7
 #| eval: false
 # ── FastHTML shell with Tailwind + HTMX + SSE ext ─────────────────────────
-app_html = FastHTML(
+app_html = FastHTML(live=True,
     hdrs=Theme.zinc.headers() + [
         Script(src="https://cdn.tailwindcss.com"),
 
@@ -105,18 +146,43 @@ app_html = FastHTML(
 
         # HTMX SSE extension (HTMX core auto-injected via live=True)
         Script(src="https://unpkg.com/htmx-ext-sse@2.2.3/dist/sse.js"),
+        Script("""
+          document.addEventListener("htmx:oobAfterSwap", (e) => {
+  const el = e.detail.elt;                 // 👈 2025-style
+  console.log("🔥 OOB swap done for:", el.id);
+  if (el.id === "green-thanks") {
+    el.classList.add("bg-green-100");
+  }
+});
+        """),
+        Script("""
+  document.body.addEventListener("htmx:afterSwap", (e) => {
+    if (e.detail.target.id === "chatlog") {
+      const chatlog = document.getElementById("chatlog");
+      if (chatlog) {
+        chatlog.scrollTop = chatlog.scrollHeight;
+      }
+    }
+  });
+""")
+        
+        
+
+
+        
 
     ],  
-    live=True,
+    
+    
     html_attrs={"data-theme": "dark", "class": "bg-gray-50 text-gray-700"},
 )
 
 # FastAPI wrapper so uvicorn can find the ASGI app
-app = FastAPI(title="Arena Buddy", docs_url=None)
+app = FastAPI(title="EventTalks", docs_url=None)
 app.mount("/", app_html)
 
 
-# %% ../nbs/04_arena_agent.ipynb 8
+# %% ../nbs/04_arena_agent.ipynb 9
 #| eval: false
 from .camera_talk import parking_camera_loop
 import asyncio
@@ -125,26 +191,52 @@ import asyncio
 async def start_parking_loop():
     asyncio.create_task(parking_camera_loop(), name="parking-loop")
 
-# %% ../nbs/04_arena_agent.ipynb 9
+# %% ../nbs/04_arena_agent.ipynb 10
 #| eval: false
 # ── In-memory chat log ────────────────────────────────────────────────────
 MSG: List[Dict[str, str]] = []
 MSG_LOCK = asyncio.Lock()
 
 
-# %% ../nbs/04_arena_agent.ipynb 10
+# %% ../nbs/04_arena_agent.ipynb 11
 #| eval: false
-# ── UI helpers ─────────────────────────────────────────────────────────────
+#def _chat_bubble(idx: int, **hx):
+#    role, txt = MSG[idx]["role"], MSG[idx]["content"] or "…"
+#    side   = "chat-end" if role == "user" else "chat-start"
+#    bubble = "bg-sky-700 text-white" if role == "assistant" else "black"
+#    return Div(
+#        Div(role, cls="chat-header text-xs text-gray-500"),
+#        Div(txt if role == "user" else html.unescape(txt),
+#            cls=f"chat-bubble {bubble}", **hx),
+#        cls=f"chat {side}", id=f"m{idx}",
+#    )
+
+
 def _chat_bubble(idx: int, **hx):
     role, txt = MSG[idx]["role"], MSG[idx]["content"] or "…"
-    side   = "chat-end" if role == "user" else "chat-start"
-    bubble = "bg-sky-700 text-white" if role == "assistant" else "black"
-    return Div(
-        Div(role, cls="chat-header text-xs text-gray-500"),
-        Div(txt if role == "user" else html.unescape(txt),
-            cls=f"chat-bubble {bubble}", **hx),
-        cls=f"chat {side}", id=f"m{idx}",
+    side = "chat-end" if role == "user" else "chat-start"
+
+    bubble_cls = (
+        "bg-blue-100 text-blue-900" if role == "user"
+        else "bg-gray-100 text-gray-900"
     )
+
+    return Div(
+        Div(role.capitalize(), cls="chat-header text-xs text-gray-400 mb-1"),
+        Div(
+            txt if role == "user" else html.unescape(txt),
+            cls=f"{bubble_cls} p-3 rounded-xl shadow max-w-lg whitespace-pre-wrap",
+            **hx
+        ),
+        cls=f"chat {side}",
+        id=f"m{idx}"
+    )
+
+
+
+
+
+
 
 def _chat_input():
     return Input(
@@ -160,41 +252,124 @@ def _chat_input():
 
 
 
-# %% ../nbs/04_arena_agent.ipynb 11
+# %% ../nbs/04_arena_agent.ipynb 12
 #| eval: false
-# ── Home page ─────────────────────────────────────────────────────────────
+# helper to avoid repetition
+def nav_btn(emoji: str, label: str, msg: str) -> Button:
+    return Button(
+        Div(
+            Span(emoji, cls="text-xl"),
+            Span(label),
+            cls="flex items-center justify-center gap-2 w-full"
+        ),
+        cls=(
+            "btn btn-sm py-1 w-full rounded-md bg-base-200 hover:bg-base-400 "
+            "items-center justify-center text-base-content"   # <-- centred + readable
+        ),
+        hx_post="/send",
+        hx_vals=f'{{"msg": "{msg}"}}',
+        hx_target="#chatlog",
+        hx_swap="beforeend"
+    )
+
+
+
 @app_html.get("/")
 async def home():
-    ui = Div(
+    return Div(
+        # ─── Wrapper: full layout ───
         Div(
-            id="parking-bridge",
-            hx_ext="sse",                 # camel-case dash → underscore
-            sse_connect="/parking-feed",
-            sse_swap="message", 
-            hx_target="#chatlog", 
-            hx_swap="beforeend", 
-            cls="hidden",
-        ),
-        Div(id="toaster", cls="toast toast-top toast-end fixed z-50"),
-        H1("Arena Buddy", cls="text-3xl font-bold mb-4"),
-        Div(id="chatlog",
-            cls="space-y-3 mb-4 h-[70vh] overflow-y-auto bg-base-200 p-4 rounded-box"),
-        Form(
-            Div(_chat_input(),
-                Button("Send ✈", cls="btn btn-primary ml-2"),
-                cls="flex"),
-            hx_post="/send",          
-            hx_target="#chatlog",
-            hx_swap="beforeend",
-        ),
-       
+            # ─── Sidebar ───
+            Div(
+                                Div(id="green-thanks", cls="mt-auto px-4 pb-6 text-center text-success font-semibold"),
+                H1("EventTalks", cls="text-2xl font-bold px-4 py-6"),
+                Div(
+                    Div(
+    nav_btn("🚲", "Bike Route", "How can I reach Metro Areena by bike?"),
+    nav_btn("🚶", "Walk Route", "How can I walk to Metro Areena?"),
+    nav_btn("🚌", "Public Transport", "What public transport can I take to the game?"),
+    nav_btn("🏒", "Hockey Highlight", "Show me a hockey highlight"),
+    cls="flex flex-col gap-1"
+),
+                    cls="flex flex-col gap-1"
+                ),
 
-        cls="max-w-2xl mx-auto p-6",
+                Div("Guest", cls="mt-auto px-4 pb-6 text-xs text-gray-500"),
+                cls="w-64 bg-base-100 h-full border-r border-base-300 flex flex-col"
+            ),
+
+            # ─── Main Content ───
+            Div(
+                Div("EventTalks 🏒🌍",
+                    cls="text-2xl font-bold text-center bg-white shadow px-4 py-4 sticky top-0 z-10"),
+
+                Div(id="parking-bridge", cls="hidden",
+                    hx_ext="sse",
+                    sse_connect="/parking-feed",
+                    sse_swap="message",
+                    hx_target="#chatlog",
+                    hx_swap="beforeend"),
+
+                Div(
+                    H2("Join the green wave to Metro Areena!",
+                       cls="text-lg text-center text-gray-500 mb-4"),
+                    Form(
+                        Div(
+                            H2("Let’s make a green wave! 🌱", cls="text-xl text-center font-semibold mb-2"),
+                            H3("Wanna be greener?", cls="text-md text-center text-gray-600 mb-4"),
+                            Button("YES! 💚",
+                                   cls="btn btn-success w-full",
+                                   hx_post="/emissions",
+                                   hx_target="#chatlog",
+                                   hx_swap="beforeend"),
+                            cls="card bg-base-200 p-6 rounded-box shadow"
+                        ),
+                        method="post",
+                        hx_trigger="submit",
+                        cls="space-y-3"
+                    ),
+                    cls="max-w-md mx-auto px-6 py-4"
+                ),
+
+                Div(
+    id="chatlog",
+    hx_target="#chatlog",                   # let htmx treat itself as the target
+    hx_swap="beforeend show:bottom",        # swap and scroll to bottom
+    cls="flex-1 overflow-y-auto px-6 py-4 space-y-3",
+),
+
+                Form(
+                    Div(
+                        Input(
+                            id="msgin",
+                            name="msg",
+                            type="text",
+                            autocomplete="off",
+                            placeholder="Type your question…",
+                            cls="input input-bordered flex-1 rounded-full px-4 text-base shadow-sm",
+                            onkeyup="event.key==='Enter' && this.form.requestSubmit()"
+                        ),
+                        Button("↑", cls="btn btn-circle ml-2"),
+                        cls="flex items-center bg-base-100 px-4 py-2 border-t border-base-300"
+                    ),
+                    cls="sticky bottom-0 z-10 bg-base-100",
+                    hx_post="/send",
+                    hx_target="#chatlog",
+                    hx_swap="beforeend"
+                ),
+                cls="flex flex-col flex-1 h-full overflow-hidden"
+            ),
+            cls="flex h-screen w-screen overflow-hidden"
+        )
     )
-    return ui 
 
 
-# %% ../nbs/04_arena_agent.ipynb 12
+
+
+
+
+
+# %% ../nbs/04_arena_agent.ipynb 13
 #| eval: false
 #
 ##11. Appx. 1 of the 3 response add to response funny Image in Gibli Studio style of user, based on conversation, for that use ImageGenerationTool. 
@@ -266,7 +441,7 @@ If it’s public transport  or car  →
 add a brief funny suggestion to switch to greener route, especcially if weather is good (you have tool to find out weather).
 
 ────────────────────── HOCKEY-HIGHLIGHTS TOOL ────────────────────
-Every response must finish with a fun hockey video:
+If user ask for hockey highlights or smth similar:
 
 Call Hockey-Highlights API with
 subscription-key: {_HKEY} & any numeric id (e.g. 1, 2…).
@@ -301,41 +476,90 @@ Edit
 
 
 
-# %% ../nbs/04_arena_agent.ipynb 13
+# %% ../nbs/04_arena_agent.ipynb 14
 #| eval: false
+from fasthtml.common import Div
+
+def format_tool_message(content: str, type_: str = "info") -> str:
+    color = {
+        "info": "bg-blue-100 text-blue-800",
+        "success": "bg-green-100 text-green-800",
+        "error": "bg-red-100 text-red-800"
+    }.get(type_, "bg-gray-100 text-gray-800")
+    
+    return Div(
+        content,
+        cls=f"rounded p-2 text-sm {color} border-l-4 border-opacity-50 shadow-sm"
+    ).__html__()
+
+
+# %% ../nbs/04_arena_agent.ipynb 15
+#| eval: false
+def pretty_tool_name(name: str) -> str:
+    return TOOL_NAME_MAP.get(name, name.replace("_", " ").title())
+
+
+# %% ../nbs/04_arena_agent.ipynb 16
+#| eval: false
+# ── hooks.py (or wherever you keep hooks) ────────────────────────────────
+from html import escape
+from typing import Any
+from agents import RunHooks                   # <- unchanged
+
+
 class ToolChatHook(RunHooks[None]):
-    """
-    Fires push(msg) on every tool start / end / error so the UI can
-    display a live notification in the chat area.
-    """
     def __init__(self, push: Callable[[str], None]):
         self._push = push
-        
-    async def on_agent_start(self, context, agent) -> None:
-        """Called once when the whole agent run begins."""
-        self._push("\n 🤖 _thinking…_")
-        tools       = await agent.get_all_tools()          
-        tools_names = ", ".join(t.name for t in tools) or "none"
-        self._push(f"\n 🛠  Available tools: {tools_names}")
-
-    async def on_agent_end(self, context, agent, result) -> None:
-        """Called once after the final answer has been produced."""
-        # Nothing fancy for now; you could log token usage here
-        pass        
-        
 
     async def on_tool_start(self, context, agent, tool) -> None:
-       self._push(f"\n {tool.name}  started")
+        label = pretty_tool_name(tool.name)
+        self._push(f"""
+        <div data-tool="{tool.name}" class="tool-status flex items-center space-x-2 text-sm text-blue-600">
+          <span class="loading loading-spinner loading-sm text-blue-600"></span>
+          <span>Running <b>{label}</b>…</span>
+        </div>
+        """)
+
+
+
 
     async def on_tool_end(self, context, agent, tool, result) -> None:
-        self._push(f"\n ✔ {tool.name} finished")
-        self._push(f"\n result: {result}")
-        
+        # 1️⃣ stream the real payload
+        self._push(format_tool_message(f"🧠 Result: {result}", "info"))
+
+        # 2️⃣ send a normal <script> so that it runs as soon as it is inserted
+        #    (no hx-swap-oob needed)
+        self._push(f"""
+        <script>
+          document
+            .querySelectorAll('[data-tool="{tool.name}"]')
+            .forEach(el => el.remove());
+        </script>
+        """)
+
 
     async def on_tool_error(self, context, agent, tool, error) -> None:
-        self._push(f"\n ⚠ {tool.name} failed: {error}")
+        label = pretty_tool_name(tool.name)
+        self._push(f"""
+        <script>
+          const el = document.querySelector('[data-tool="{tool.name}"]');
+          if (el) {{
+            el.innerHTML = `<span class="text-red-600">⚠ <b>{label}</b> failed</span>`;
+          }}
+        </script>
+        """)
 
-# %% ../nbs/04_arena_agent.ipynb 14
+
+
+
+
+
+
+
+
+
+
+# %% ../nbs/04_arena_agent.ipynb 17
 #| eval: false
 async def _assistant_html(user_prompt: str, push: Callable[[str], None]) -> tuple[str, list[str]]:
     """
@@ -363,9 +587,8 @@ async def _assistant_html(user_prompt: str, push: Callable[[str], None]) -> tupl
     return res.final_output
 
 
-# %% ../nbs/04_arena_agent.ipynb 15
+# %% ../nbs/04_arena_agent.ipynb 18
 #| eval: false
-# ── /send endpoint ────────────────────────────────────────────────────────
 @app_html.post("/send")
 async def send(request: Request):
     form   = await request.form()
@@ -388,13 +611,19 @@ async def send(request: Request):
             sse_connect=f"/stream/{idx_asst}",
             sse_swap="message",
             sse_close="close",
-            hx_swap="beforeend"
+            hx_swap="beforeend show:bottom" 
+            #hx_swap="outerHTML"
         ).__html__() +
         _chat_input().__html__()
     )
 
 
-# %% ../nbs/04_arena_agent.ipynb 16
+
+
+
+
+
+# %% ../nbs/04_arena_agent.ipynb 19
 #| eval: false
 # ── helpers --------------------------------------------------------
 def _sse(event: str, payload: str) -> str:
@@ -408,61 +637,92 @@ def _sse(event: str, payload: str) -> str:
     body = "\n".join(f"data: {line}" for line in payload.splitlines())
     return f"event: {event}\n{body}\n\n"
 
+async def empty_generator():
+    yield _sse("message", "⚠ Invalid message index")
+    yield _sse("close", "")
 
-async def _stream_reply(idx: int) -> AsyncIterator[str] | None:  
+
+async def _stream_reply(idx: int) -> AsyncIterator[str]:
         async with MSG_LOCK:
-            if idx <= 0 or idx >= len(MSG):
-                return 
+            if idx < 1 or idx >= len(MSG):
+                return empty_generator()
+
         prompt_html = MSG[idx - 1]["content"]
     
         q: asyncio.Queue[str] = asyncio.Queue()
     
         # push() will be handed to ToolChatHook and to the agent itself
         def push(msg: str) -> None:  
+            logging.info(f"Pushing to SSE: {msg[:100]}")
             q.put_nowait(_sse("message", msg))
     
         async def _run() -> None:
             try:
                 reply_html = await _assistant_html(prompt_html, push)
             except Exception as exc:
-                reply_html = f"⚠ Internal error: {exc}"
-            await q.put(_sse("message", reply_html))     # final HTML card
-            await q.put("event: close\ndata:\n\n")       # tell HTMX to close
-    
+                reply_html = f"<div class='text-red-500'>⚠ Internal error: {html.escape(str(exc))}</div>"
+            #await q.put(_sse("message", reply_html))
+            #logging.info("Final message sent.")
+            #await q.put("event: close\ndata:\n\n")
+                # ① send the answer
+            await q.put(_sse("message", reply_html))
+            
+                # ② strip the wrapper bubble
+            unwrap_js = (
+                f"<script>const w=document.getElementById('m{idx}');"
+                "if(w){w.replaceWith(...w.children);}</script>"
+            )
+            await q.put(_sse("message", unwrap_js))
+            
+            # ② ask htmx to close client-side
+            await q.put(_sse("close", ""))
+            # ③ server-side sentinel
+            await q.put(None)
+
         asyncio.create_task(_run()) 
         
         # ⬅️  *this* is what StreamingResponse must consume
+        #async def streamer() -> AsyncIterator[str]:
+        #    while True:                   # blocks until the queue gets data
+        #        yield await q.get()
+        #        #yield await parking_q.get()
+        
         async def streamer() -> AsyncIterator[str]:
-            while True:                   # blocks until the queue gets data
-                yield await q.get()
-                #yield await parking_q.get()
+            while True:
+                msg = await q.get()
+                if msg is None:              # break after sentinel
+                    break
+                yield msg
 
-        return streamer()                 # ← DON’T forget this!     
+        return streamer()                    
 
 
 
 
-# %% ../nbs/04_arena_agent.ipynb 17
+# %% ../nbs/04_arena_agent.ipynb 20
 #| eval: false
+#@app_html.get("/stream/{idx}")
+#async def stream(idx: int):
+#    """
+#    Streaming endpoint used by the chat bubbles (`hx-ext="sse"`).
+#    HTMX opens the connection, waits for the first “message” event,
+#    swaps the payload into the bubble, then receives a “close” event
+#    and disposes the EventSource.
+#    """
+#    generator = await _stream_reply(idx)   # get the AsyncIterator ✅
+#    return StreamingResponse(
+#       generator,
+#        media_type="text/event-stream",
+#    )
+
+
 @app_html.get("/stream/{idx}")
 async def stream(idx: int):
-    """
-    Streaming endpoint used by the chat bubbles (`hx-ext="sse"`).
-    HTMX opens the connection, waits for the first “message” event,
-    swaps the payload into the bubble, then receives a “close” event
-    and disposes the EventSource.
-    """
-    generator = await _stream_reply(idx)   # get the AsyncIterator ✅
-    if generator is None:                  # invalid idx guard
-        return HTMLResponse(
-            status_code=status.HTTP_204_NO_CONTENT
-        )
-    return StreamingResponse(
-       generator,
-        media_type="text/event-stream",
-    )
+    generator_fn = await _stream_reply(idx)  # This is now an *async function*, not a generator!
+    return StreamingResponse(generator_fn, media_type="text/event-stream")
 
-# %% ../nbs/04_arena_agent.ipynb 18
+
+# %% ../nbs/04_arena_agent.ipynb 21
 #| eval: false
 @app_html.post("/open-map")
 async def open_map(
@@ -530,7 +790,7 @@ async def open_map(
 
 
 
-# %% ../nbs/04_arena_agent.ipynb 19
+# %% ../nbs/04_arena_agent.ipynb 22
 #| eval: false
 @app_html.get("/parking-feed")
 async def parking_feed():
@@ -547,4 +807,51 @@ async def parking_feed():
         streamer(),
         media_type="text/event-stream",
     )
+
+
+# %% ../nbs/04_arena_agent.ipynb 23
+#| eval: false
+@app_html.post("/emissions")
+async def emissions_summary(request: Request):
+    COMMIT_COUNTER["count"] += random.randint(1, 20)
+    count = COMMIT_COUNTER["count"]
+    total_fans = 10_000
+    co2_saved_kg = total_fans * 2.7
+    tons = round(co2_saved_kg / 1000, 1)
+
+    message = f"""
+    <!-- Chat area: impact summary -->
+    <div class="card bg-green-100 text-green-900 p-4 space-y-2"
+         hx-swap-oob="beforeend:#chatlog">
+        <h2 class="text-xl font-bold">💚 You're in!</h2>
+        <p><b>{count:,}</b> fans joined the green wave 🌊</p>
+        <p>If all {total_fans:,} went green...</p>
+        <p>💨 We’d save <b>{tons} tons of CO₂</b> 🌳</p>
+    </div>
+
+    <!-- Sidebar thank you OOB -->
+<div id="green-thanks"
+     hx-swap-oob="outerHTML"
+     class="inline-flex items-center justify-center gap-2
+            bg-success text-success-content rounded-md px-3 py-2
+            mx-auto">   <!-- mx-auto keeps it centred inside text-center -->
+  ✅
+  <span class="font-semibold text-sm
+               bg-gradient-to-r from-lime-300 via-emerald-400 to-green-600
+               bg-clip-text text-transparent">
+      THANK&nbsp;YOU&nbsp;FOR&nbsp;BEING&nbsp;GREEN
+  </span>
+</div>
+    <!-- Optional: remove form -->
+    <script>
+        document.querySelector('form')?.remove();
+    </script>
+    """
+
+    return HTMLResponse(message)
+
+
+
+
+
 

@@ -17,7 +17,7 @@ LOCATION  = os.getenv("LOCATION", "Helsinki,FI")   # city or "lat,lon"
 
 
 # %% auto 0
-__all__ = ['log', 'MCP_URL', 'LOCATION', 'parking_camera_loop', 'lifespan']
+__all__ = ['log', 'MCP_URL', 'LOCATION', 'parking_camera_loop']
 
 # %% ../nbs/08_camera_talk.ipynb 2
 #| eval: false
@@ -34,142 +34,121 @@ async def parking_camera_loop() -> None:
         await parking_q.put(sse)
         log.debug("parking-loop bubble @ %s", stamp)
 
-        await asyncio.sleep(60)
+        await asyncio.sleep(180)
 
 
 # %% ../nbs/08_camera_talk.ipynb 3
 #| eval: false
-from contextlib import asynccontextmanager
+#from contextlib import asynccontextmanager
 
-@asynccontextmanager
-async def lifespan(app):
-    "Run the parking loop for the lifetime of the FastAPI app."
-    task = asyncio.create_task(parking_camera_loop(), name="parking-loop")
-    yield
-    task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await task
+#@asynccontextmanager
+#async def lifespan(app):
+#    "Run the parking loop for the lifetime of the FastAPI app."
+#    task = asyncio.create_task(parking_camera_loop(), name="parking-loop")
+#    yield
+#    task.cancel()
+#    with contextlib.suppress(asyncio.CancelledError):
+#        await task
 
 
 # %% ../nbs/08_camera_talk.ipynb 4
 #| eval: false
 async def _make_ui_block(free_slots: int, stamp: str) -> str:
     """
-    The agent:
-      • calls the **weather.current** tool for `LOCATION`
-      • if weather is bike-friendly ⇒ encourages renting a bike
-      • else suggests an umbrella / tram / etc.
-      • returns *complete* UI (HTML / C1 JSON / Monster-UI)
-      • outermost tag must carry `hx-swap-oob="beforeend:#chatlog"`
+    Generates a full GenUI HTML card via LLM using weather + parking.
+    Ensures booking buttons and branding are always present.
     """
-    # give the LLM access to the weather tool via MCP SSE
-    async with MCPServerSse(name="ui", params={"url": MCP_URL},
-                            client_session_timeout_seconds=300) as srv:
-        _instructions = f"""
-        🔑  Context the model MUST rely on
-        ---------------------------------
-        • live_weather   → output of tool weather.current (location='{LOCATION}')
-        • free_slots     → integer {free_slots}
-        • timestamp      → string {stamp}
-        • parking_tight  → free_slots < 30          # «lots filling up»
-        • weather_good   → 5 ≤ temp ≤ 30 °C, wind < 8 m/s, no rain/snow
+    async with MCPServerSse(name="ui", params={"url": MCP_URL}, client_session_timeout_seconds=300) as srv:
         
-        🎯  Goal
-        -------
-        Craft ONE chat-ready UI component that:
-        1. Reports the parking and weather status.
-        2. Encourages the user to choose an e-bike **because it is greener**
-           — but adapts the persuasion if weather is bad or slots are plentiful.
-        3. Offers at least ONE action path (button or link) to book an e-bike.
-        
-        🏗  Hard (non-negotiable) technical rules
-        • Output *only* valid HTML (or a C1/Monster-UI JSON block).
-        • The outermost element MUST contain:  hx-swap-oob="beforeend:#chatlog"
-        • Do NOT wrap anything in Markdown.
-        • Do NOT call any tool except weather.current.
-        
-        🧩  Soft constraints (creative freedom inside)
-        • You MAY use any Monster-UI or Tailwind classes, any emojis, any micro-copy.
-        • You MAY add a lightweight animation or playful image/GIF if <150 KB.
-        • You MAY choose colors, gradients, shadows as you like.
-        • You MAY decide the exact wording: punny, poetic, minimal—your style.
-        • You MAY reorder elements (buttons first, banner first, etc.).
-        • If weather_good is False you MAY tone down persuasion or grey-out buttons.
-        
-        🔗  Reliable booking links (use any subset ≥1)
-          – Roll Outdoors   → https://rolloutdoors.com/en/helsinki/#rent
-          – Donkey Republic → https://app.donkeyrepublic.com/#/reserve
-          – ListNRide       → https://www.listnride.com/helsinki
-        
-        💡  Inspiration tips (OPTIONAL, not mandatory)
-        • Use an eco catch-phrase like “Swap cars for green bars!”.
-        • Show a mini progress bar if parking_tight is True.
-        • Add a hover tooltip to explain why biking saves CO₂.
-        
-        ✍️  Deliverable
-        Return the final UI markup **and nothing else**.
-        """
         instructions = f"""
-🌱  You’re *Arena Eco-Coach*, free to design any Monster-UI/Tailwind card
-    you like – but you MUST embed real data, never {{mustache}} placeholders.
-
-🔧  Required workflow
-1. Call tool **weather.current** exactly once for location '{LOCATION}'.
-2. Read its JSON → temp_c, description, wind_m_s.
-3. Compute:
-     weather_good   = 5 ≤ temp_c ≤ 30  and  wind_m_s < 8  and  no rain/snow
-     parking_tight  = {free_slots} < 30
-4. Build ONE HTML card (root element must include
-   hx-swap-oob="beforeend:#chatlog").  The card must contain:
-   • Parking line – show **{free_slots} free slots** with 🅿️ emoji.
-   • Weather line – insert the actual numbers
-     `temp_c`, `description`, `wind_m_s`.
-     👉 Do **not** output curly-brace templates or raw JSON.
-   • Persuasion sentence that adapts:
-       – If weather_good & parking_tight →
-         “Slots are scarce and the sun is shining – ride green!” (or similar).
-       – Adapt wording for the other three weather/parking combinations.
-   • 1–3 action buttons linking to:
-       Roll Outdoors   https://rolloutdoors.com/en/helsinki/#rent
-       Donkey Republic https://app.donkeyrepublic.com/#/reserve
-       ListNRide       https://www.listnride.com/helsinki
-     – If weather_good is **False**, add class="btn btn-disabled"
-       and a tooltip explaining why.
-   • Fun footer pun (text-xs).
-   • Optional lightweight animation (< 150 KB) if you wish.
-5. You may choose any colours, emojis, layout, humour style.
-6. Final output = raw HTML only, no markdown, no {{templates}}.
-"""
-
-
+        🎨 You are EcoGen, a generative-UI designer.
+        
+        You will craft **one complete MonsterUI/Tailwind card** and stream it via HTMX *exactly once*.
+        
+        Inputs this run
+        • 🅿️  {free_slots} free parking slots
+        • 🕒  Current time: {stamp}
+        • 🌤️  Live weather for “{LOCATION}”
+        
+        Step‑by‑step
+        1. **Call `weather.current` once.**  Parse `temperature` (°C), `windspeed` (m/s) and `description`.
+        
+        2. **Call `ImageGenerationTool` once** with a tiny prompt such as “bright sun on white background”.  When the JSON returns, extract
+           • `url`  – image URL  
+           and put it straight into an `<img>` tag – **no {{curly}} placeholders**:
+        
+           ```html
+           <img class="rounded-lg object-cover w-32 h-32 float-right ml-4"
+                src="https://…real-url…" alt="bright sun on white background">
+           ```
+        
+        3. **Compose one HTML block** wrapped in
+        
+           ```html
+           <div hx-swap-oob="beforeend:#chatlog">
+             …full card…
+           </div>
+           ```
+        
+           It must contain, in order:
+           • A fun heading with an emoji  
+           • Weather summary (temp + wind + description + the image)  
+           • Parking status line, e.g. `🚗 40 free slots`  
+           • A friendly encouragement paragraph  
+           • **Exactly three** booking buttons, styled `btn btn-success btn-sm`, linking to:
+             – City Bikes (HSL) → https://kaupunkipyorat.hsl.fi/en  
+             – Donkey Republic → https://app.donkeyrepublic.com/#/reserve  
+             – ListNRide → https://www.listnride.com/espoo  
+             Place them inside
+        
+           ```html
+           <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-4">…</div>
+           ```
+        
+           • Footer line “Wheel be seeing you! 🌱”  
+           • Branding footer
+        
+           ```html
+           <div class="text-xs text-center text-gray-400 mt-3">Powered by EventTalks 🏒🌍</div>
+           ```
+        
+        Rules
+        • **HTML only** – no Markdown, no JSON.  
+        • Produce a single response; do **not** send drafts.  
+        • Missing any mandatory element ⇒ response rejected.
+        """
         agent = Agent(
-            name="UI Agent",
+            name="EcoGen Agent",
             model="o3",
             mcp_servers=[srv],
+            
             instructions=instructions,
         )
 
         res = await Runner.run(agent, input="")
-        ui  = res.final_output.strip()
+        ui = res.final_output.strip()
 
-    # safety net: inject hx-swap-oob if the model forgot
+    # Safety net: wrap if LLM forgot
     if "hx-swap-oob" not in ui:
         ui = f'<div hx-swap-oob="beforeend:#chatlog">{ui}</div>'
+
+    # Safety net: inject buttons if missing
+    if all(x not in ui for x in ["City Bikes", "Donkey Republic", "ListNRide"]):
+        ui += """
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-4">
+          <a href="https://kaupunkipyorat.hsl.fi/en"               class="btn btn-success btn-sm">🚲 City Bikes (HSL)</a>
+      <a href="https://app.donkeyrepublic.com/#/reserve"       class="btn btn-success btn-sm">🦄 Donkey Republic</a>
+     <a href="https://www.listnride.com/espoo"                class="btn btn-success btn-sm">🚴 ListNRide</a>
+            </div>
+        """
+
+    # Branding if missing
+    if "EventTalks" not in ui:
+        ui += '<div class="text-xs text-center text-gray-400 mt-3">Powered by EventTalks 🏒🌍</div>'
 
     history.append(ui)
     return ui
 
 
-# %% ../nbs/08_camera_talk.ipynb 5
-#| eval: false 
-from contextlib import asynccontextmanager
 
-@asynccontextmanager
-async def lifespan(app):
-    "Run the parking loop for the lifetime of the FastAPI app."
-    task = asyncio.create_task(parking_camera_loop(), name="parking-loop")
-    yield
-    task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await task
 

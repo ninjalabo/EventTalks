@@ -68,6 +68,30 @@ app = mcp.http_app(transport="sse", path="/sse")
 
 # %% ../nbs/03_fastmcp_tools.ipynb 4
 #| eval: false
+import logging
+logging.basicConfig(level=logging.INFO)
+
+def _log_request(url, headers=None, method="GET", payload=None):
+    logging.info("📤 %s Request URL: %s", method, url)
+    if headers:
+        logging.info("📤 Headers: %s", headers)
+    if payload:
+        logging.info("📤 Payload: %s", payload)
+        
+        
+async def _log_httpx_request(client: httpx.AsyncClient, method: str, url: str, **kwargs):
+    logging.info("📤 %s Request to %s", method.upper(), url)
+    logging.info("📤 Headers: %s", client.headers)
+    if "json" in kwargs:
+        logging.info("📤 JSON Payload: %s", kwargs["json"])
+    if "params" in kwargs:
+        logging.info("📤 Params: %s", kwargs["params"])
+        
+        
+
+
+# %% ../nbs/03_fastmcp_tools.ipynb 5
+#| eval: false
 @app.on_event("startup")
 async def _auto_mount_tools() -> None:
     try:
@@ -93,7 +117,7 @@ async def _auto_mount_tools() -> None:
 #    except Exception as exc:
 #        logging.error("❌ Could not mount GeoApiFy API: %s", exc)      
 
-# %% ../nbs/03_fastmcp_tools.ipynb 5
+# %% ../nbs/03_fastmcp_tools.ipynb 6
 #| eval: false
 async def _mount_hockey_api(parent: FastMCP, name: str = "hockey") -> list[str]:
     """
@@ -136,7 +160,7 @@ async def _mount_hockey_api(parent: FastMCP, name: str = "hockey") -> list[str]:
 
 
 
-# %% ../nbs/03_fastmcp_tools.ipynb 6
+# %% ../nbs/03_fastmcp_tools.ipynb 7
 #| eval: false
 from anyio import Path
 
@@ -176,7 +200,7 @@ async def _mount_routing_api(parent: FastMCP,
 
 
 
-# %% ../nbs/03_fastmcp_tools.ipynb 7
+# %% ../nbs/03_fastmcp_tools.ipynb 8
 #| eval: false
 from anyio import Path
 
@@ -216,7 +240,7 @@ async def _mount_geocoding_api(parent: FastMCP,
     parent.mount(name, sub)
     return [t.name for t in (await sub.get_tools()).values()]
 
-# %% ../nbs/03_fastmcp_tools.ipynb 8
+# %% ../nbs/03_fastmcp_tools.ipynb 9
 #| eval: false
 import os, requests
 from urllib.parse import quote_plus
@@ -248,6 +272,7 @@ def _fwd_geocode(addr: str) -> Tuple[float, float]:
         f"{BASE_URL}/geocode/search?"
         f"text={quote_plus(addr)}&limit=1&format=json&apiKey={API_KEY}"
     )
+    _log_request(url, headers=_HEADERS)
     logging.info("✅ URL FOR FWD GEOCODING %s", url)
     r = requests.get(url, headers=_HEADERS, timeout=30)
     status = r.raise_for_status()
@@ -328,6 +353,7 @@ def _route(start: str, finish: str, mode: str) -> RouteResult:
         f"&format=json"
         f"&apiKey={API_KEY}"
     )
+    _log_request(url, headers=_HEADERS)
     r = requests.get(url, headers=_HEADERS, timeout=60)
     r.raise_for_status()
     data = r.json()
@@ -407,7 +433,7 @@ def route_public_transport(start: str, finish: str) -> List[str]:
 
 
 
-# %% ../nbs/03_fastmcp_tools.ipynb 9
+# %% ../nbs/03_fastmcp_tools.ipynb 10
 #| eval: false
 async def _mount_weather_api(parent: FastMCP, name: str = "weather") -> list[str]:
     from anyio import Path
