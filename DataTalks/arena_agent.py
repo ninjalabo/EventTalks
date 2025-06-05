@@ -667,13 +667,7 @@ async def _stream_reply(idx: int) -> AsyncIterator[str]:
                 # ① send the answer
             await q.put(_sse("message", reply_html))
             
-                # ② strip the wrapper bubble
-            unwrap_js = (
-                f"<script>const w=document.getElementById('m{idx}');"
-                "if(w){w.replaceWith(...w.children);}</script>"
-            )
-            await q.put(_sse("message", unwrap_js))
-            
+         
             # ② ask htmx to close client-side
             await q.put(_sse("close", ""))
             # ③ server-side sentinel
