@@ -4,128 +4,201 @@
 #| eval: false
 from __future__ import annotations
 
+from collections import deque
+
 import asyncio, datetime as dt, random, logging, os, contextlib
-from .arena_agent import parking_q, history
+
 
 from agents import Agent, Runner
 from agents.mcp import MCPServerSse         
 
+
 log = logging.getLogger(__name__)
 
 MCP_URL   = os.getenv("MCP_URL",   "http://tools:9001/sse")
-LOCATION  = os.getenv("LOCATION", "Helsinki,FI")   # city or "lat,lon"
+CHART_MCP_URL  = os.getenv("CHART_MCP_URL", "http://chart:3000/sse")
 
+LOCATION  = os.getenv("LOCATION", "Espoo,FI")   # city or "lat,lon"
+HIST_LEN       = int(os.getenv("HIST_LEN", 20))
+
+_series: deque[int] = deque(maxlen=HIST_LEN)
+_labels: deque[str] = deque(maxlen=HIST_LEN)
+
+last_val = 120
 
 # %% auto 0
-__all__ = ['log', 'MCP_URL', 'LOCATION', 'parking_camera_loop']
+__all__ = ['log', 'MCP_URL', 'CHART_MCP_URL', 'LOCATION', 'HIST_LEN', 'last_val', 'ToolChatHook', 'parking_camera_loop']
 
 # %% ../nbs/08_camera_talk.ipynb 2
 #| eval: false
-async def parking_camera_loop() -> None:
-    "Send a Gen-UI block every 60 s."
-    while True:
-        free_slots = random.randint(0, 120)
-        stamp      = dt.datetime.now().strftime("%H:%M:%S")
+from agents import RunHooks
+import html
 
-        ui_block   = await _make_ui_block(free_slots, stamp)
+    
+class ToolChatHook(RunHooks[None]):
+    def __init__(self, push_tool):
+        self._push_tool = push_tool
 
-        # one SSE `message`
-        sse = "event: message\ndata: " + ui_block.replace("\n", "\ndata: ") + "\n\n"
-        await parking_q.put(sse)
-        log.debug("parking-loop bubble @ %s", stamp)
+    async def on_tool_start(self, ctx, agent, tool):
+        self._push_tool(f"<div class='border-l-4 border-blue-500 pl-2'>"
+                        f"🔧 {tool.name} started…</div>")
 
-        await asyncio.sleep(180)
+    async def on_tool_end(self, ctx, agent, tool, result):
+        self._push_tool(f"<div class='border-l-4 border-green-500 pl-2'>"
+                        f"✅ {tool.name} finished. ")
+                        #f"{html.escape(str(result))}</div>")
 
+    async def on_tool_error(self, ctx, agent, tool, err):
+        self._push_tool(f"<div class='border-l-4 border-red-500 pl-2'>"
+                        f"⚠️ {tool.name} failed: "
+                        f"{html.escape(str(err))}</div>")
 
 # %% ../nbs/08_camera_talk.ipynb 3
 #| eval: false
-#from contextlib import asynccontextmanager
+async def parking_camera_loop(q, sse_helper) -> None:
+    """Send a Gen-UI block every 180 s with an updated chart."""
+    global last_val                         # start full
+    while True:
+        delta      = random.randint(0, 5)  # random drop 0-5
+        last_val   = max(last_val - delta, 0)
+        stamp      = dt.datetime.now().strftime("%H:%M:%S")
 
-#@asynccontextmanager
-#async def lifespan(app):
-#    "Run the parking loop for the lifetime of the FastAPI app."
-#    task = asyncio.create_task(parking_camera_loop(), name="parking-loop")
-#    yield
-#    task.cancel()
-#    with contextlib.suppress(asyncio.CancelledError):
-#        await task
+        _series.append(last_val)
+        _labels.append(stamp)
 
+        try:
+            ui_block = await asyncio.wait_for(
+    _make_ui_block(
+        list(_series), list(_labels), last_val, stamp,
+        push_tool=lambda html: q.put_nowait(
+            sse_helper("message",
+                       f'<div hx-swap-oob="beforeend:#tool-log">{html}</div>')
+        )
+    ),
+    timeout=120
+)
+
+        except Exception as exc:
+                    log.error("parking widget failed: %s", exc, exc_info=True)
+                    ui_block = (
+                        f'<div hx-swap-oob="beforeend:#chatlog" '
+                        f'class="alert alert-error">⚠ parking widget error – {exc}</div>'
+                    )
+        await q.put(sse_helper("message", ui_block))
+        await asyncio.sleep(180)          # 3-min cadence
 
 # %% ../nbs/08_camera_talk.ipynb 4
 #| eval: false
-async def _make_ui_block(free_slots: int, stamp: str) -> str:
+import json
+from typing import Callable
+
+async def _make_ui_block(series: list[int], labels: list[str], last_val, stamp, push_tool: Callable[[str], None]) -> str:
     """
     Generates a full GenUI HTML card via LLM using weather + parking.
     Ensures booking buttons and branding are always present.
     """
     async with MCPServerSse(name="ui", params={"url": MCP_URL}, client_session_timeout_seconds=300) as srv:
-        
+
+        # Prepare chart config dictionary and convert to JSON
+        chart_config = {
+            "chartConfig": {
+                "type": "line",
+                "data": {
+                    "labels": labels,
+                    "datasets": [{
+                        "label": "Free slots",
+                        "data": series,
+                        "borderColor": "#10b981",
+                        "fill": False  # Python bool – will be converted to JS-compatible false
+                    }]
+                },
+                "options": {
+                    "plugins": {
+                        "title": {
+                            "display": True,
+                            "text": f"Parking last {len(series) * 3} min"
+                        }
+                    },
+                    "scales": {
+                        "y": {
+                            "beginAtZero": True
+                        }
+                    }
+                }
+            },
+            "width": 450,
+            "height": 250,
+            "devicePixelRatio": 2,
+            "version": "4"
+        }
+
+        # Serialize to JSON with correct JS booleans
+        chart_config_json = json.dumps(chart_config, indent=2)
+        escaped_json = chart_config_json.replace("{", "{{").replace("}", "}}")
+
+
         instructions = f"""
         🎨 You are EcoGen, a generative-UI designer.
-        
-        You will craft **one complete MonsterUI/Tailwind card** and stream it via HTMX *exactly once*.
-        
+
+        You will craft one complete MonsterUI/Tailwind card and stream it via HTMX exactly once.
+
         Inputs this run
-        • 🅿️  {free_slots} free parking slots
+        • 🅿️  {last_val} free parking slots
         • 🕒  Current time: {stamp}
         • 🌤️  Live weather for “{LOCATION}”
-        
+
         Step‑by‑step
-        1. **Call `weather.current` once.**  Parse `temperature` (°C), `windspeed` (m/s) and `description`.
-        
-        2. **Call `ImageGenerationTool` once** with a tiny prompt such as “bright sun on white background”.  When the JSON returns, extract
-           • `url`  – image URL  
-           and put it straight into an `<img>` tag – **no {{curly}} placeholders**:
-        
-           ```html
-           <img class="rounded-lg object-cover w-32 h-32 float-right ml-4"
-                src="https://…real-url…" alt="bright sun on white background">
-           ```
-        
-        3. **Compose one HTML block** wrapped in
-        
-           ```html
-           <div hx-swap-oob="beforeend:#chatlog">
-             …full card…
-           </div>
-           ```
-        
-           It must contain, in order:
-           • A fun heading with an emoji  
-           • Weather summary (temp + wind + description + the image)  
-           • Parking status line, e.g. `🚗 40 free slots`  
-           • A friendly encouragement paragraph  
-           • **Exactly three** booking buttons, styled `btn btn-success btn-sm`, linking to:
-             – City Bikes (HSL) → https://kaupunkipyorat.hsl.fi/en  
-             – Donkey Republic → https://app.donkeyrepublic.com/#/reserve  
-             – ListNRide → https://www.listnride.com/espoo  
-             Place them inside
-        
-           ```html
-           <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-4">…</div>
-           ```
-        
-           • Footer line “Wheel be seeing you! 🌱”  
-           • Branding footer
-        
-           ```html
-           <div class="text-xs text-center text-gray-400 mt-3">Powered by EventTalks 🏒🌍</div>
-           ```
-        
-        Rules
-        • **HTML only** – no Markdown, no JSON.  
-        • Produce a single response; do **not** send drafts.  
+        1. Call `weather.7_day_weather_forecast_for_coordinates` once.
+
+        2. Call `chart.generate_chart` once with this exact JSON (no placeholders):
+
+        ```json
+        {escaped_json}
+        ```
+
+        Extract the returned url and embed it directly:
+        ```html
+        <img class="w-full rounded-lg mt-4" src="https://…chart-url…" alt="slots chart">
+        ```
+
+        3. Compose one HTML block wrapped in
+        ```html
+        <div hx-swap-oob="beforeend:#chatlog">
+          …full card…
+        </div>
+        ```
+
+        It must contain, in order:
+        • A fun heading with an emoji  
+        • Weather summary and your funny comment 
+        • Parking status line, e.g. `🚗 {last_val} free slots`
+        • Chart with parking status line  
+        • A friendly encouragement paragraph to use bike or public transport if weather is bad to avoid carbon emission.
+        • Exactly three booking buttons, linking to:
+          – CityBikes(HSL) → https://kaupunkipyorat.hsl.fi/en  
+          – Donkey Republic → https://app.donkeyrepublic.com/#/reserve  
+          – ListNRide → https://www.listnride.com/espoo  
+
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-4">…</div>
+
+        • Branding footer:
+        <div class="text-xs text-center text-gray-400 mt-3">Powered by EventTalks 🏒🌍</div>
+
+        Rules:
+        • HTML only – no Markdown, no JSON.  
+        • Produce a single response; do not send drafts.  
         • Missing any mandatory element ⇒ response rejected.
         """
+
         agent = Agent(
             name="EcoGen Agent",
-            model="o3",
+            model="o4-mini",
             mcp_servers=[srv],
-            
             instructions=instructions,
         )
 
-        res = await Runner.run(agent, input="")
+        hook = ToolChatHook(push_tool)      
+        res  = await Runner.run(agent, input="", hooks=hook)
         ui = res.final_output.strip()
 
     # Safety net: wrap if LLM forgot
@@ -136,18 +209,18 @@ async def _make_ui_block(free_slots: int, stamp: str) -> str:
     if all(x not in ui for x in ["City Bikes", "Donkey Republic", "ListNRide"]):
         ui += """
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-4">
-          <a href="https://kaupunkipyorat.hsl.fi/en"               class="btn btn-success btn-sm">🚲 City Bikes (HSL)</a>
-      <a href="https://app.donkeyrepublic.com/#/reserve"       class="btn btn-success btn-sm">🦄 Donkey Republic</a>
-     <a href="https://www.listnride.com/espoo"                class="btn btn-success btn-sm">🚴 ListNRide</a>
-            </div>
+          <a href="https://kaupunkipyorat.hsl.fi/en" class="btn btn-success btn-sm">🚲 City Bikes (HSL)</a>
+          <a href="https://app.donkeyrepublic.com/#/reserve" class="btn btn-success btn-sm">🦄 Donkey Republic</a>
+          <a href="https://www.listnride.com/espoo" class="btn btn-success btn-sm">🚴 ListNRide</a>
+        </div>
         """
 
     # Branding if missing
     if "EventTalks" not in ui:
         ui += '<div class="text-xs text-center text-gray-400 mt-3">Powered by EventTalks 🏒🌍</div>'
 
-    history.append(ui)
     return ui
+
 
 
 

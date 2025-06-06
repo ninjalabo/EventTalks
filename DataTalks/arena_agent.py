@@ -4,91 +4,46 @@
 #| eval: false
 from __future__ import annotations
 
-import asyncio, html, json, os
-from typing import AsyncIterator, List, Dict, Tuple, Any
-
-from fastapi import FastAPI, Request, status
-from fasthtml import FastHTML
-from fasthtml.common import (Body, Button, Div, Form, Group, H1, H2, Input,
-                             Link, NotStr, Script, Style)
-from dataclasses import dataclass
-from typing import List, Dict
-from monsterui.all import Theme 
-
-import asyncio, datetime, random, html
-from typing import Any, List
-from fasthtml.common import NotStr
-from fastapi import FastAPI
-from sse_starlette.sse import EventSourceResponse             # <- your existing SSE helper
-from agents import Agent, Runner
-from agents.tool import function_tool                         # function-tool decorator :contentReference[oaicite:0]{index=0}
-from agents.items import ItemHelpers                          # gives tool_call_output_item :contentReference[oaicite:1]{index=1}
-from agents.mcp import MCPServerSse
-from agents.run import RunResult
-from agents.result import RunResultBase                       # for type hints
-from agents.run_context import RunContextWrapper   
-import json, uuid
-from agents.items import ResponseFunctionToolCall          # dataclass in SDK
-from agents.items import ItemHelpers 
-from agents import Agent, RunContextWrapper, RunHooks, Runner, Tool, function_tool
-from typing import Callable, Any
-from starlette.responses import StreamingResponse  
-from monsterui.franken import ModalHeader, ModalBody, Modal
-from fastapi.responses import HTMLResponse
-
 import json
-
-import json
-from typing import Any, List
-
-from fastapi import Form as ApiForm, HTTPException
-from fastapi.responses import HTMLResponse
-
-
-from collections import deque
-from agents import Agent, Runner, trace
-from agents.mcp import MCPServerSse
-
-
-import asyncio
+import datetime, random
 import html
 import json
-import os
-import uuid
-from typing import AsyncIterator, List, Dict, Callable, Any
+from typing import AsyncIterator, Callable
+from fastapi import FastAPI, status, Form as ApiForm, HTTPException
 
-from fastapi import FastAPI, Request, status, Form as ApiForm, HTTPException
-from fasthtml import FastHTML
-from fasthtml.common import Div, Input, Button, Script
 from fasthtml.common import *
 from monsterui.all import *
-from sse_starlette.sse import EventSourceResponse
-from starlette.responses import StreamingResponse, HTMLResponse
+from sse_starlette import EventSourceResponse
+from starlette.responses import HTMLResponse
 
-from agents import Agent, Runner, RunHooks
+from agents import Agent, Runner
 from agents.mcp import MCPServerSse
-from agents.run import RunResult
-from agents.result import RunResultBase
-from agents.run_context import RunContextWrapper
-from agents.items import ItemHelpers, ResponseFunctionToolCall
-from agents.tool import function_tool
-from collections import deque
+
 import logging
+from .camera_talk import parking_camera_loop
+
+import asyncio
+from dataclasses import dataclass
+from datetime import datetime
+
+from fasthtml.common import Div
+from agents import RunHooks 
+
 logging.basicConfig(level=logging.INFO)
 
 
 
 
 # %% auto 0
-__all__ = ['MCP_URL', 'OPENAI_API_KEY', 'LEAFLET_CSS', 'LEAFLET_JS', 'history', 'COMMIT_COUNTER', 'TOOL_NAME_MAP', 'parking_q',
-           'EventContext', 'app_html', 'app', 'MSG', 'MSG_LOCK', 'mainAgent_instruction', 'start_parking_loop',
-           'nav_btn', 'home', 'format_tool_message', 'pretty_tool_name', 'ToolChatHook', 'send', 'empty_generator',
-           'stream', 'open_map', 'parking_feed', 'emissions_summary']
+__all__ = ['MCP_URL', 'OPENAI_API_KEY', 'LEAFLET_CSS', 'LEAFLET_JS', 'SESSIONS', 'history', 'COMMIT_COUNTER', 'TOOL_NAME_MAP',
+           'parking_q', 'log', 'EventContext', 'app_html', 'app', 'MSG', 'MSG_LOCK', 'mainAgent_instruction',
+           'MAX_IDLE', 'lifespan', 'nav_btn', 'home', 'format_tool_message', 'pretty_tool_name', 'ToolChatHook',
+           'stream', 'send', 'empty_generator', 'open_map', 'parking_feed', 'emissions_summary', 'reap_sessions']
 
 # %% ../nbs/04_arena_agent.ipynb 2
 #| eval: false
 # ── Config (env-vars for docker-compose) ───────────────────────────────────
-MCP_URL        = os.getenv("MCP_URL", "http://tools:9001/sse")
+MCP_URL        = os.getenv("MCP_URL", "https://tools:9001/sse")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
 
@@ -99,6 +54,14 @@ LEAFLET_JS  = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
 
 # %% ../nbs/04_arena_agent.ipynb 4
 #| eval: false
+from typing import Dict, Any
+SESSIONS: Dict[str, Dict[str, Any]] = {}
+
+# %% ../nbs/04_arena_agent.ipynb 5
+#| eval: false
+_SENTINEL = object()
+
+
 history: list[dict] = []
 # Just for demo – use Redis/memcached for multi-instance
 COMMIT_COUNTER = {"count": 0}
@@ -115,26 +78,43 @@ TOOL_NAME_MAP = {
 #HAS_COMMITTED = {"done": False}
 
 
-# %% ../nbs/04_arena_agent.ipynb 5
+# %% ../nbs/04_arena_agent.ipynb 6
 #| eval: false
 parking_q: asyncio.Queue[str] = asyncio.Queue()
+log = logging.getLogger(__name__)
 
-# %% ../nbs/04_arena_agent.ipynb 6
+# %% ../nbs/04_arena_agent.ipynb 7
 #| eval: false
 @dataclass
 class EventContext:
     event_date_time: datetime
     event_title: str
     event_description: str
-    
-EventContext = EventContext(event_date_time="04.10.2025 12:00:00", 
-                            event_title="Hockey match KIEKKO-ESPOO vs KÄRPÄT", 
-                            event_description=
-                            "Liiga regular-season showdown at Metro Areena • Doors open 11:15 "                      
-                            "Sustainable transport encouraged " 
-                            "(metro: Urheilupuisto, bike racks outside Gate B).")
 
-# %% ../nbs/04_arena_agent.ipynb 7
+EventContext = EventContext(
+    event_date_time=datetime.strptime("04.10.2025 12:00:00", "%d.%m.%Y %H:%M:%S"),
+    event_title="Hockey match KIEKKO-ESPOO vs KÄRPÄT",
+    event_description=(
+        "Liiga regular-season showdown at Metro Areena • Doors open 11:15 "
+        "Sustainable transport encouraged "
+        "(metro: Urheilupuisto, bike racks outside Gate B)."
+    )
+)
+
+# %% ../nbs/04_arena_agent.ipynb 8
+#| eval: false
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    parking_task = asyncio.create_task(
+        parking_camera_loop(parking_q, _sse), name="parking-loop")
+    try:
+        yield                       
+    finally:
+        parking_task.cancel()
+
+# %% ../nbs/04_arena_agent.ipynb 9
 #| eval: false
 # ── FastHTML shell with Tailwind + HTMX + SSE ext ─────────────────────────
 app_html = FastHTML(live=True,
@@ -164,12 +144,7 @@ app_html = FastHTML(live=True,
       }
     }
   });
-""")
-        
-        
-
-
-        
+""")       
 
     ],  
     
@@ -178,40 +153,19 @@ app_html = FastHTML(live=True,
 )
 
 # FastAPI wrapper so uvicorn can find the ASGI app
-app = FastAPI(title="EventTalks", docs_url=None)
+app = FastAPI(title="EventTalks", docs_url=None, lifespan=lifespan)
 app.mount("/", app_html)
 
 
-# %% ../nbs/04_arena_agent.ipynb 9
-#| eval: false
-from .camera_talk import parking_camera_loop
-import asyncio
-
-@app.on_event("startup")        
-async def start_parking_loop():
-    asyncio.create_task(parking_camera_loop(), name="parking-loop")
-
-# %% ../nbs/04_arena_agent.ipynb 10
+# %% ../nbs/04_arena_agent.ipynb 11
 #| eval: false
 # ── In-memory chat log ────────────────────────────────────────────────────
 MSG: List[Dict[str, str]] = []
 MSG_LOCK = asyncio.Lock()
 
 
-# %% ../nbs/04_arena_agent.ipynb 11
+# %% ../nbs/04_arena_agent.ipynb 12
 #| eval: false
-#def _chat_bubble(idx: int, **hx):
-#    role, txt = MSG[idx]["role"], MSG[idx]["content"] or "…"
-#    side   = "chat-end" if role == "user" else "chat-start"
-#    bubble = "bg-sky-700 text-white" if role == "assistant" else "black"
-#    return Div(
-#        Div(role, cls="chat-header text-xs text-gray-500"),
-#        Div(txt if role == "user" else html.unescape(txt),
-#            cls=f"chat-bubble {bubble}", **hx),
-#        cls=f"chat {side}", id=f"m{idx}",
-#    )
-
-
 def _chat_bubble(idx: int, **hx):
     role, txt = MSG[idx]["role"], MSG[idx]["content"] or "…"
     side = "chat-end" if role == "user" else "chat-start"
@@ -233,11 +187,6 @@ def _chat_bubble(idx: int, **hx):
     )
 
 
-
-
-
-
-
 def _chat_input():
     return Input(
         id="msgin",                    
@@ -252,7 +201,7 @@ def _chat_input():
 
 
 
-# %% ../nbs/04_arena_agent.ipynb 12
+# %% ../nbs/04_arena_agent.ipynb 13
 #| eval: false
 # helper to avoid repetition
 def nav_btn(emoji: str, label: str, msg: str) -> Button:
@@ -264,7 +213,7 @@ def nav_btn(emoji: str, label: str, msg: str) -> Button:
         ),
         cls=(
             "btn btn-sm py-1 w-full rounded-md bg-base-200 hover:bg-base-400 "
-            "items-center justify-center text-base-content"   # <-- centred + readable
+            "items-center justify-center text-base-content"   
         ),
         hx_post="/send",
         hx_vals=f'{{"msg": "{msg}"}}',
@@ -281,6 +230,8 @@ async def home():
         Div(
             # ─── Sidebar ───
             Div(
+                
+
                                 Div(id="green-thanks", cls="mt-auto px-4 pb-6 text-center text-success font-semibold"),
                 H1("EventTalks", cls="text-2xl font-bold px-4 py-6"),
                 Div(
@@ -293,6 +244,21 @@ async def home():
 ),
                     cls="flex flex-col gap-1"
                 ),
+                # 1️⃣  --- TOOL-LOG SECTION (BOTTOM) -------------------------
+    Div(                            # pushes itself to the bottom
+        Div(                       # the actual stream target
+            id="tool-log",
+            cls=(
+                "overflow-y-auto max-h-48 "  # 12rem ≈ 192 px; tweak as you like
+                "space-y-2 px-4 py-2 text-sm text-blue-800"
+            ),
+        ),
+        cls=(
+            "mt-auto w-full border-t border-base-300 "
+            "bg-base-100 sticky bottom-0"   # always visible even if list long
+        ),
+    ),
+
 
                 Div("Guest", cls="mt-auto px-4 pb-6 text-xs text-gray-500"),
                 cls="w-64 bg-base-100 h-full border-r border-base-300 flex flex-col"
@@ -333,7 +299,7 @@ async def home():
 
                 Div(
     id="chatlog",
-    hx_target="#chatlog",                   # let htmx treat itself as the target
+    #hx_target="#chatlog",                   # let htmx treat itself as the target
     hx_swap="beforeend show:bottom",        # swap and scroll to bottom
     cls="flex-1 overflow-y-auto px-6 py-4 space-y-3",
 ),
@@ -369,18 +335,8 @@ async def home():
 
 
 
-# %% ../nbs/04_arena_agent.ipynb 13
+# %% ../nbs/04_arena_agent.ipynb 14
 #| eval: false
-#
-##11. Appx. 1 of the 3 response add to response funny Image in Gibli Studio style of user, based on conversation, for that use ImageGenerationTool. 
-# 
-#────────────────────────  HOCKEY-HIGHLIGHTS TOOL  ─────────────────────────
-#Every response should be following video from this tool. 
-#Subscription key: {_HKEY}, id could be any 1, 2 ...
-#• After you receive the JSON, extract `title`, `imgUrl` and `embedUrl`
-#  and show them to the user.
-#details=route_details
-
 _HKEY = os.environ["HOCKEY_KEY"]          # hockey_highlights tool
 _RKEY = os.environ["GEOAPIFY_KEY"]        # still needed by the routing tools 🎟️
 
@@ -476,10 +432,50 @@ Edit
 
 
 
-# %% ../nbs/04_arena_agent.ipynb 14
+# %% ../nbs/04_arena_agent.ipynb 15
 #| eval: false
-from fasthtml.common import Div
+async def _start_run(run_id: str, prompt_html: str):
+    session = SESSIONS[run_id]                 #  dict laid out in /send
+    chat_q  = session["chat_q"]
+    tool_q  = session["tool_q"]
+    any_tools = False
 
+    def push_chat(html: str):
+        chat_q.put_nowait(_sse("message", html))
+
+    def push_tool(html: str):
+        nonlocal any_tools
+        any_tools = True                    # got at least one tool msg
+        tool_q.put_nowait(_sse("message", html))
+
+    async with MCPServerSse(name="ui", params={"url": MCP_URL},
+                            client_session_timeout_seconds=300) as srv:
+        agent = Agent(
+            name         = "Main Agent",
+            instructions = mainAgent_instruction,
+            mcp_servers  = [srv],
+            model        = "o4-mini",
+        )
+        hook = ToolChatHook(push_tool)
+        res  = await Runner.run(agent, prompt_html, hooks=hook)
+
+    push_chat(res.final_output or
+              "<div class='text-sm text-gray-500'>✅ Task completed.</div>")
+    # graceful closes
+    chat_q.put_nowait(_sse("close", ""))
+    if any_tools:
+        tool_q.put_nowait(_sse("close",""))
+        
+    else:
+        # still push a dummy "noop" then close so the client swaps once
+        tool_q.put_nowait(_sse("message",""))   # empty swap does nothing
+        tool_q.put_nowait(_sse("close",""))     # 👈 guarantees teardown
+        
+    session["closed_at"] = time.time()
+
+
+# %% ../nbs/04_arena_agent.ipynb 16
+#| eval: false
 def format_tool_message(content: str, type_: str = "info") -> str:
     color = {
         "info": "bg-blue-100 text-blue-800",
@@ -493,102 +489,81 @@ def format_tool_message(content: str, type_: str = "info") -> str:
     ).__html__()
 
 
-# %% ../nbs/04_arena_agent.ipynb 15
+# %% ../nbs/04_arena_agent.ipynb 17
 #| eval: false
 def pretty_tool_name(name: str) -> str:
     return TOOL_NAME_MAP.get(name, name.replace("_", " ").title())
 
 
-# %% ../nbs/04_arena_agent.ipynb 16
-#| eval: false
-# ── hooks.py (or wherever you keep hooks) ────────────────────────────────
-from html import escape
-from typing import Any
-from agents import RunHooks                   # <- unchanged
-
-
-class ToolChatHook(RunHooks[None]):
-    def __init__(self, push: Callable[[str], None]):
-        self._push = push
-
-    async def on_tool_start(self, context, agent, tool) -> None:
-        label = pretty_tool_name(tool.name)
-        self._push(f"""
-        <div data-tool="{tool.name}" class="tool-status flex items-center space-x-2 text-sm text-blue-600">
-          <span class="loading loading-spinner loading-sm text-blue-600"></span>
-          <span>Running <b>{label}</b>…</span>
-        </div>
-        """)
-
-
-
-
-    async def on_tool_end(self, context, agent, tool, result) -> None:
-        # 1️⃣ stream the real payload
-        self._push(format_tool_message(f"🧠 Result: {result}", "info"))
-
-        # 2️⃣ send a normal <script> so that it runs as soon as it is inserted
-        #    (no hx-swap-oob needed)
-        self._push(f"""
-        <script>
-          document
-            .querySelectorAll('[data-tool="{tool.name}"]')
-            .forEach(el => el.remove());
-        </script>
-        """)
-
-
-    async def on_tool_error(self, context, agent, tool, error) -> None:
-        label = pretty_tool_name(tool.name)
-        self._push(f"""
-        <script>
-          const el = document.querySelector('[data-tool="{tool.name}"]');
-          if (el) {{
-            el.innerHTML = `<span class="text-red-600">⚠ <b>{label}</b> failed</span>`;
-          }}
-        </script>
-        """)
-
-
-
-
-
-
-
-
-
-
-
-# %% ../nbs/04_arena_agent.ipynb 17
-#| eval: false
-async def _assistant_html(user_prompt: str, push: Callable[[str], None]) -> tuple[str, list[str]]:
-    """
-    ①   mount / call tools as needed
-    ②   craft the plain-text answer
-    ③   wrap it in MonsterUI HTML
-    returns (html_block, ["tool: output", …])
-    """
-  
-
-    async with MCPServerSse(name="ui", params={"url": MCP_URL}, client_session_timeout_seconds=300)as srv:
-        agent = Agent(
-            name="Main Agent",
-            instructions=mainAgent_instruction,
-            mcp_servers=[srv],            
-            model="o3",
-            
-        )
-        hook = ToolChatHook(push)
-
-        res = await Runner.run(agent, user_prompt, hooks=hook)
-        history.append({"user": user_prompt})
-        history.append(res)
-
-    return res.final_output
-
-
 # %% ../nbs/04_arena_agent.ipynb 18
 #| eval: false
+from html import escape
+
+class ToolChatHook(RunHooks[None]):
+    def __init__(self, push_tool):
+        self._push_tool = push_tool
+
+    async def on_tool_start(self, ctx, agent, tool):
+        self._push_tool(f"<div class='border-l-4 border-blue-500 pl-2'>"
+                        f"🔧 {pretty_tool_name(tool.name)} started…</div>")
+
+    async def on_tool_end(self, ctx, agent, tool, result):
+        self._push_tool(f"<div class='border-l-4 border-green-500 pl-2'>"
+                        f"✅ {pretty_tool_name(tool.name)} finished. ")
+                        #f"{html.escape(str(result))}</div>")
+
+    async def on_tool_error(self, ctx, agent, tool, err):
+        self._push_tool(f"<div class='border-l-4 border-red-500 pl-2'>"
+                        f"⚠️ {pretty_tool_name(tool.name)} failed: "
+                        f"{html.escape(str(err))}</div>")
+
+
+
+
+
+# %% ../nbs/04_arena_agent.ipynb 19
+#| eval: false
+@app_html.get("/stream/{channel}/{run_id}")
+async def stream(channel: str, run_id: str):
+    if run_id not in SESSIONS:
+        async def empty():
+            yield "event: close\ndata:\n\n"
+        return EventSourceResponse(empty(), headers={"Content-Type": "text/event-stream"})
+    
+    
+    session = SESSIONS[run_id]            # created in /send
+
+    # start the background task exactly once
+    if not session.get("started"):
+        session["started"] = True
+        asyncio.create_task(_start_run(run_id, session["prompt"]))
+
+    chat_q, tool_q = session["chat_q"], session["tool_q"]
+
+    q = chat_q if channel == "chat" else tool_q
+
+    async def gen():
+        while True:
+            msg = await q.get()
+            
+            yield msg
+            
+            if isinstance(msg, dict) and msg.get("event") == "close":
+                break
+            
+
+    headers = {
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Accel-Buffering": "no",
+    }
+    return EventSourceResponse(gen(), headers=headers, ping=15)
+
+
+# %% ../nbs/04_arena_agent.ipynb 20
+#| eval: false
+from uuid import uuid4
+
 @app_html.post("/send")
 async def send(request: Request):
     form   = await request.form()
@@ -602,20 +577,45 @@ async def send(request: Request):
             {"role": "assistant", "content": ""},
         ])
         idx_user, idx_asst = len(MSG) - 2, len(MSG) - 1
+        
+        run_id = uuid4().hex
+        
+        
+        
+        
+           # --- initialise queues & save the prompt -----------------------------
+        SESSIONS[run_id] = {
+               "chat_q":   asyncio.Queue(),
+               "tool_q":   asyncio.Queue(),
+               "prompt":   html.escape(prompt),
+               "started":  False,                 # flag so we start the run once
+           }
 
-    return (
-        _chat_bubble(idx_user).__html__() +
-        _chat_bubble(
-            idx_asst,
-            hx_ext="sse",
-            sse_connect=f"/stream/{idx_asst}",
-            sse_swap="message",
-            sse_close="close",
-            hx_swap="beforeend show:bottom" 
-            #hx_swap="outerHTML"
+        return (
+            _chat_bubble(idx_user).__html__() +
+            _chat_bubble(
+                idx_asst,
+                hx_ext="sse",
+                sse_connect=f"/stream/chat/{run_id}",
+                sse_swap="message",
+                sse_close="close",
+                #hx_swap="beforeend show:bottom" 
+                #hx_swap="outerHTML"
+                hx_swap     = "innerHTML scroll:bottom"
+            ).__html__() +
+             Div(                       # hidden bridge element
+            id         = f"tool-bridge-{run_id}",
+            cls        = "hidden",
+            hx_ext     = "sse",
+            sse_connect= f"/stream/tools/{run_id}",
+            sse_swap   = "message",
+            sse_close   = "close",      
+            hx_target  = "#tool-log",
+            hx_swap    = "beforeend"
         ).__html__() +
-        _chat_input().__html__()
-    )
+
+            _chat_input().__html__()
+        )
 
 
 
@@ -623,100 +623,30 @@ async def send(request: Request):
 
 
 
-# %% ../nbs/04_arena_agent.ipynb 19
+# %% ../nbs/04_arena_agent.ipynb 21
 #| eval: false
-# ── helpers --------------------------------------------------------
-def _sse(event: str, payload: str) -> str:
-    """
-    Return one correctly-formatted Server-Sent-Events block.
+def _sse(event: str, payload: str):
+    """Return a dict Starlette understands as an SSE frame."""
+    return {"event": event, "data": payload}
 
-    Each logical message must be terminated with a *blank* line, otherwise
-    the browser keeps buffering and the event never reaches the JS side.
-    """
-    # HTMX’ sse.js is happy with plain HTML, so we don’t wrap in JSON here.
-    body = "\n".join(f"data: {line}" for line in payload.splitlines())
-    return f"event: {event}\n{body}\n\n"
+
+
+
+
 
 async def empty_generator():
     yield _sse("message", "⚠ Invalid message index")
     yield _sse("close", "")
 
 
-async def _stream_reply(idx: int) -> AsyncIterator[str]:
-        async with MSG_LOCK:
-            if idx < 1 or idx >= len(MSG):
-                return empty_generator()
 
-        prompt_html = MSG[idx - 1]["content"]
-    
-        q: asyncio.Queue[str] = asyncio.Queue()
-    
-        # push() will be handed to ToolChatHook and to the agent itself
-        def push(msg: str) -> None:  
-            logging.info(f"Pushing to SSE: {msg[:100]}")
-            q.put_nowait(_sse("message", msg))
-    
-        async def _run() -> None:
-            try:
-                reply_html = await _assistant_html(prompt_html, push)
-            except Exception as exc:
-                reply_html = f"<div class='text-red-500'>⚠ Internal error: {html.escape(str(exc))}</div>"
-            #await q.put(_sse("message", reply_html))
-            #logging.info("Final message sent.")
-            #await q.put("event: close\ndata:\n\n")
-                # ① send the answer
-            await q.put(_sse("message", reply_html))
-            
-         
-            # ② ask htmx to close client-side
-            await q.put(_sse("close", ""))
-            # ③ server-side sentinel
-            await q.put(None)
 
-        asyncio.create_task(_run()) 
-        
-        # ⬅️  *this* is what StreamingResponse must consume
-        #async def streamer() -> AsyncIterator[str]:
-        #    while True:                   # blocks until the queue gets data
-        #        yield await q.get()
-        #        #yield await parking_q.get()
-        
-        async def streamer() -> AsyncIterator[str]:
-            while True:
-                msg = await q.get()
-                if msg is None:              # break after sentinel
-                    break
-                yield msg
-
-        return streamer()                    
+                
 
 
 
 
-# %% ../nbs/04_arena_agent.ipynb 20
-#| eval: false
-#@app_html.get("/stream/{idx}")
-#async def stream(idx: int):
-#    """
-#    Streaming endpoint used by the chat bubbles (`hx-ext="sse"`).
-#    HTMX opens the connection, waits for the first “message” event,
-#    swaps the payload into the bubble, then receives a “close” event
-#    and disposes the EventSource.
-#    """
-#    generator = await _stream_reply(idx)   # get the AsyncIterator ✅
-#    return StreamingResponse(
-#       generator,
-#        media_type="text/event-stream",
-#    )
-
-
-@app_html.get("/stream/{idx}")
-async def stream(idx: int):
-    generator_fn = await _stream_reply(idx)  # This is now an *async function*, not a generator!
-    return StreamingResponse(generator_fn, media_type="text/event-stream")
-
-
-# %% ../nbs/04_arena_agent.ipynb 21
+# %% ../nbs/04_arena_agent.ipynb 22
 #| eval: false
 @app_html.post("/open-map")
 async def open_map(
@@ -784,26 +714,17 @@ async def open_map(
 
 
 
-# %% ../nbs/04_arena_agent.ipynb 22
+# %% ../nbs/04_arena_agent.ipynb 23
 #| eval: false
 @app_html.get("/parking-feed")
 async def parking_feed():
-    """
-    Persistent SSE used by the camera loop.
-    It never closes; every camera message is an already-formatted
-    chat bubble HTML string produced by _sse("message", …).
-    """
-    async def streamer() -> AsyncIterator[str]:
+    async def streamer() -> AsyncIterator[dict]:
         while True:
             yield await parking_q.get()
-
-    return StreamingResponse(
-        streamer(),
-        media_type="text/event-stream",
-    )
+    return EventSourceResponse(streamer(), ping=15)
 
 
-# %% ../nbs/04_arena_agent.ipynb 23
+# %% ../nbs/04_arena_agent.ipynb 24
 #| eval: false
 @app_html.post("/emissions")
 async def emissions_summary(request: Request):
@@ -848,4 +769,22 @@ async def emissions_summary(request: Request):
 
 
 
+
+
+# %% ../nbs/04_arena_agent.ipynb 25
+#| eval: false
+import time
+MAX_IDLE = 300                       # seconds
+
+async def reap_sessions():
+    while True:
+        await asyncio.sleep(60)
+        now = time.time()
+        for rid, sess in list(SESSIONS.items()):
+            if sess.get("closed_at") and now - sess["closed_at"] > MAX_IDLE:
+                SESSIONS.pop(rid, None)
+
+@app_html.on_event("startup")
+async def _launch_reaper():
+    asyncio.create_task(reap_sessions())
 
