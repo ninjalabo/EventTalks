@@ -59,7 +59,7 @@ async def parking_camera_loop(q, sse_helper) -> None:
     """Send a Gen-UI block every 180 s with an updated chart."""
     global last_val                         # start full
     while True:
-        delta      = random.randint(0, 5)  # random drop 0-5
+        delta      = random.randint(30, 50)  # random drop 30-50
         last_val   = max(last_val - delta, 0)
         stamp      = dt.datetime.now().strftime("%H:%M:%S")
 
@@ -147,19 +147,29 @@ async def _make_ui_block(series: list[int], labels: list[str], last_val, stamp, 
         • 🕒  Current time: {stamp}
         • 🌤️  Live weather for “{LOCATION}”
 
-        Step‑by‑step
+        Step-by-step
         1. Call `weather.7_day_weather_forecast_for_coordinates` once.
 
-        2. Call `chart.generate_chart` once with this exact JSON (no placeholders):
+        2. If **{last_val} > 0** → call `chart.generate_chart` with the JSON below  
+           (unchanged):
 
         ```json
         {escaped_json}
         ```
 
-        Extract the returned url and embed it directly:
-        ```html
-        <img class="w-full rounded-lg mt-4" src="https://…chart-url…" alt="slots chart">
-        ```
+        2b. If **{last_val} == 0** → **instead** call
+            `image_gen.generate_image` with a playful prompt, e.g.  
+            `"a cheerful cyclist splashing through a Helsinki rain shower, flat illustration, bright colours"`.  
+            The tool returns an `ImageContent` object whose `.url` field is the direct PNG/JPG.  
+            Embed it like:
+
+            ```html
+            <img class="w-full rounded-lg mt-4"
+                 src="https://actual-image-url.png"
+                 alt="Try a bike or bus!">
+            ```
+
+            
 
         3. Compose one HTML block wrapped in
         ```html
@@ -170,25 +180,28 @@ async def _make_ui_block(series: list[int], labels: list[str], last_val, stamp, 
 
         It must contain, in order:
         • A fun heading with an emoji  
-        • Weather summary and your funny comment 
-        • Parking status line, e.g. `🚗 {last_val} free slots`
-        • Chart with parking status line  
-        • A friendly encouragement paragraph to use bike or public transport if weather is bad to avoid carbon emission.
+        • Weather summary and your funny comment  
+        • Parking status line, e.g. `🚗 {last_val} free slots`  
+        • Chart *or* generated image, per the branch above  
+        • A friendly encouragement paragraph to use bike or public transport  
         • Exactly three booking buttons, linking to:
           – CityBikes(HSL) → https://kaupunkipyorat.hsl.fi/en  
           – Donkey Republic → https://app.donkeyrepublic.com/#/reserve  
           – ListNRide → https://www.listnride.com/espoo  
-
-        <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-4">…</div>
+          Use  
+          `<div class="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-4"> … </div>`
 
         • Branding footer:
-        <div class="text-xs text-center text-gray-400 mt-3">Powered by EventTalks 🏒🌍</div>
+        <div class="text-xs text-center text-gray-400 mt-3">
+          Powered by EventTalks 🏒🌍
+        </div>
 
         Rules:
         • HTML only – no Markdown, no JSON.  
         • Produce a single response; do not send drafts.  
         • Missing any mandatory element ⇒ response rejected.
         """
+
 
         agent = Agent(
             name="EcoGen Agent",
@@ -200,6 +213,8 @@ async def _make_ui_block(series: list[int], labels: list[str], last_val, stamp, 
         hook = ToolChatHook(push_tool)      
         res  = await Runner.run(agent, input="", hooks=hook)
         ui = res.final_output.strip()
+        
+        
 
     # Safety net: wrap if LLM forgot
     if "hx-swap-oob" not in ui:
