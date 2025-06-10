@@ -11,3 +11,4 @@ python-dateutil==2.9.0.post0
 openai-agents==0.0.16
 openai-agents-mcp==0.0.8
 monsterui==1.0.21
+pillow

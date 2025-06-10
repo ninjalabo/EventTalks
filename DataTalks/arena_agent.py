@@ -154,7 +154,17 @@ app_html = FastHTML(live=True,
 
 # FastAPI wrapper so uvicorn can find the ASGI app
 app = FastAPI(title="EventTalks", docs_url=None, lifespan=lifespan)
+
+# 1️⃣  Mount static **first**
+app.mount(
+    "/static",
+    StaticFiles(directory=Path(__file__).resolve().parent / "static"),
+    name="static",
+)
 app.mount("/", app_html)
+
+
+
 
 
 # %% ../nbs/04_arena_agent.ipynb 11

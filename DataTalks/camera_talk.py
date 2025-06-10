@@ -11,6 +11,8 @@ import asyncio, datetime as dt, random, logging, os, contextlib
 
 from agents import Agent, Runner
 from agents.mcp import MCPServerSse         
+from pathlib import Path
+import base64          
 
 
 log = logging.getLogger(__name__)
@@ -21,13 +23,16 @@ CHART_MCP_URL  = os.getenv("CHART_MCP_URL", "http://chart:3000/sse")
 LOCATION  = os.getenv("LOCATION", "Espoo,FI")   # city or "lat,lon"
 HIST_LEN       = int(os.getenv("HIST_LEN", 20))
 
+BIKE_IMG = Path(__file__).with_name("happy_bike.png")
+
 _series: deque[int] = deque(maxlen=HIST_LEN)
 _labels: deque[str] = deque(maxlen=HIST_LEN)
 
-last_val = 120
+last_val = 20
 
 # %% auto 0
-__all__ = ['log', 'MCP_URL', 'CHART_MCP_URL', 'LOCATION', 'HIST_LEN', 'last_val', 'ToolChatHook', 'parking_camera_loop']
+__all__ = ['log', 'MCP_URL', 'CHART_MCP_URL', 'LOCATION', 'HIST_LEN', 'BIKE_IMG', 'last_val', 'ToolChatHook',
+           'parking_camera_loop']
 
 # %% ../nbs/08_camera_talk.ipynb 2
 #| eval: false
@@ -45,8 +50,8 @@ class ToolChatHook(RunHooks[None]):
 
     async def on_tool_end(self, ctx, agent, tool, result):
         self._push_tool(f"<div class='border-l-4 border-green-500 pl-2'>"
-                        f"✅ {tool.name} finished. ")
-                        #f"{html.escape(str(result))}</div>")
+                        f"✅ {tool.name} finished. "
+                        f"{html.escape(str(result))}</div>")
 
     async def on_tool_error(self, ctx, agent, tool, err):
         self._push_tool(f"<div class='border-l-4 border-red-500 pl-2'>"
@@ -59,7 +64,7 @@ async def parking_camera_loop(q, sse_helper) -> None:
     """Send a Gen-UI block every 180 s with an updated chart."""
     global last_val                         # start full
     while True:
-        delta      = random.randint(40, 60)  # random drop 30-50
+        delta      = random.randint(100, 120)  # random drop 30-50
         last_val   = max(last_val - delta, 0)
         stamp      = dt.datetime.now().strftime("%H:%M:%S")
 
@@ -93,13 +98,17 @@ import json
 from typing import Callable
 from agents import ImageGenerationTool
 from openai.types.responses.tool import ImageGeneration
+from agents import ModelSettings
+from openai import AsyncOpenAI
+
 
 async def _make_ui_block(series: list[int], labels: list[str], last_val, stamp, push_tool: Callable[[str], None]) -> str:
     """
     Generates a full GenUI HTML card via LLM using weather + parking.
     Ensures booking buttons and branding are always present.
     """
-            # Prepare chart config dictionary and convert to JSON
+ 
+
     chart_config = {
             "chartConfig": {
                 "type": "line",
@@ -150,12 +159,17 @@ async def _make_ui_block(series: list[int], labels: list[str], last_val, stamp, 
         Step-by-step
         1. Call `weather.7_day_weather_forecast_for_coordinates` once.
 
-        2. Call `chart.generate_chart` with the JSON below  
+        2.1. If Number of free parking slots > 0 : Call `chart.generate_chart` with the JSON below  
            (unchanged):
 
         ```json
         {escaped_json}
         ```
+        2.2. If Number of free parking slots <= 0 : 
+        Call your generate_image tool (it saves the JPEG src="/static/images/h_bike.jpg"):
+python success = generate_image( prompt="Parking is fool, but cartoon bike riding happy to the stdium Metro Areena", n=1, size="1024x1024" )
+ Then embed that file directly into this HTML snippet:
+html <div class="mt-4 text-center"> <img src="/static/images/h_bike.jpg" alt="Full parking slots – happy bike" style="max-width:100%; height:auto;" /> </div>
             
 
         3. Compose one HTML block wrapped in
@@ -169,7 +183,7 @@ async def _make_ui_block(series: list[int], labels: list[str], last_val, stamp, 
         • A fun heading with an emoji  
         • Weather summary and your funny comment  
         • Parking status line, e.g. `🚗 {last_val} free slots`  
-        • Chart    
+        • Chart or Image (from 2.)
         • A friendly encouragement paragraph to use bike or public transport  
         • Exactly three booking buttons, linking to:
           – CityBikes(HSL) → https://kaupunkipyorat.hsl.fi/en  
@@ -188,25 +202,18 @@ async def _make_ui_block(series: list[int], labels: list[str], last_val, stamp, 
         • Produce a single response; do not send drafts.  
         
         """
-        
-        
+         
         
         agent = Agent(
             name="EcoGen Agent",
-            model="o3",
-            mcp_servers=[srv],
-            #handoffs=[agent_image_generation],
-            #    tools=[
-        #ImageGenerationTool(
-        #    tool_config={"type": "image_generation", "quality": "low"},
-        #)
-    #],
-            instructions=instructions,  
-            
+            model="o4-mini",
+            mcp_servers=[srv],                         
+            instructions=instructions,            
             
         )
 
-        hook = ToolChatHook(push_tool)      
+        hook = ToolChatHook(push_tool)    
+        
         res  = await Runner.run(agent, input="", hooks=hook)
         
         log.info("Agent UI raw output: %s", res.final_output)
@@ -234,17 +241,7 @@ async def _make_ui_block(series: list[int], labels: list[str], last_val, stamp, 
         ui += '<div class="text-xs text-center text-gray-400 mt-3">Powered by EventTalks 🏒🌍</div>'
     
     
-    # Fallback: if no QuickChart chart was rendered, show local happy_bike.png
-    # (QuickChart embeds an <img src="https://quickchart.io"…>, so we check for that)
-    #if "quickchart.io" not in ui:
-    #   ui += """
-    #   <div class="mt-4 text-center">
-    #     <img src="\\\\wsl.localhost\\Ubuntu\\home\\nata\\DataTalks\\happy_bike.png"
-    #          alt="Happy bike"
-    #          style="max-width:100%;height:auto;">
-    #   </div>
-    #   """
-    
+ 
     
     log.info("parking widget: %s", ui)
     return ui
