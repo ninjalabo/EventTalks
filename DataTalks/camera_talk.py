@@ -150,7 +150,7 @@ async def _make_ui_block(series: list[int], labels: list[str], last_val, stamp, 
         Step-by-step
         1. Call `weather.7_day_weather_forecast_for_coordinates` once.
 
-        2. ONLY If **{last_val} > 0** → call `chart.generate_chart` with the JSON below  
+        2. Call `chart.generate_chart` with the JSON below  
            (unchanged):
 
         ```json
@@ -169,7 +169,7 @@ async def _make_ui_block(series: list[int], labels: list[str], last_val, stamp, 
         • A fun heading with an emoji  
         • Weather summary and your funny comment  
         • Parking status line, e.g. `🚗 {last_val} free slots`  
-        • Chart o       
+        • Chart    
         • A friendly encouragement paragraph to use bike or public transport  
         • Exactly three booking buttons, linking to:
           – CityBikes(HSL) → https://kaupunkipyorat.hsl.fi/en  
@@ -236,14 +236,14 @@ async def _make_ui_block(series: list[int], labels: list[str], last_val, stamp, 
     
     # Fallback: if no QuickChart chart was rendered, show local happy_bike.png
     # (QuickChart embeds an <img src="https://quickchart.io"…>, so we check for that)
-    if "quickchart.io" not in ui:
-       ui += """
-       <div class="mt-4 text-center">
-         <img src="\\\\wsl.localhost\\Ubuntu\\home\\nata\\DataTalks\\happy_bike.png"
-              alt="Happy bike"
-              style="max-width:100%;height:auto;">
-       </div>
-       """
+    #if "quickchart.io" not in ui:
+    #   ui += """
+    #   <div class="mt-4 text-center">
+    #     <img src="\\\\wsl.localhost\\Ubuntu\\home\\nata\\DataTalks\\happy_bike.png"
+    #          alt="Happy bike"
+    #          style="max-width:100%;height:auto;">
+    #   </div>
+    #   """
     
     
     log.info("parking widget: %s", ui)
