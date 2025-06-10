@@ -59,7 +59,7 @@ async def parking_camera_loop(q, sse_helper) -> None:
     """Send a Gen-UI block every 180 s with an updated chart."""
     global last_val                         # start full
     while True:
-        delta      = random.randint(50, 100)  # random drop 30-50
+        delta      = random.randint(40, 60)  # random drop 30-50
         last_val   = max(last_val - delta, 0)
         stamp      = dt.datetime.now().strftime("%H:%M:%S")
 
@@ -85,7 +85,7 @@ async def parking_camera_loop(q, sse_helper) -> None:
                         f'class="alert alert-error">⚠ parking widget error – {exc}</div>'
                     )
         await q.put(sse_helper("message", ui_block))
-        await asyncio.sleep(60)          # 3-min cadence
+        await asyncio.sleep(90)          # 3-min cadence
 
 # %% ../nbs/08_camera_talk.ipynb 4
 #| eval: false
@@ -150,14 +150,12 @@ async def _make_ui_block(series: list[int], labels: list[str], last_val, stamp, 
         Step-by-step
         1. Call `weather.7_day_weather_forecast_for_coordinates` once.
 
-        2. If **{last_val} > 0** → call `chart.generate_chart` with the JSON below  
+        2. ONLY If **{last_val} > 0** → call `chart.generate_chart` with the JSON below  
            (unchanged):
 
         ```json
         {escaped_json}
         ```
-
-        2b. If {last_val} == 0 create nice image with ImageGenerationTool about hapy bike or happy walker or happy public transport user flying to Metro Areena stadion and warp it in to the final card properly.
             
 
         3. Compose one HTML block wrapped in
@@ -171,7 +169,7 @@ async def _make_ui_block(series: list[int], labels: list[str], last_val, stamp, 
         • A fun heading with an emoji  
         • Weather summary and your funny comment  
         • Parking status line, e.g. `🚗 {last_val} free slots`  
-        
+        • Chart o       
         • A friendly encouragement paragraph to use bike or public transport  
         • Exactly three booking buttons, linking to:
           – CityBikes(HSL) → https://kaupunkipyorat.hsl.fi/en  
@@ -198,11 +196,11 @@ async def _make_ui_block(series: list[int], labels: list[str], last_val, stamp, 
             model="o3",
             mcp_servers=[srv],
             #handoffs=[agent_image_generation],
-                tools=[
-        ImageGenerationTool(
-            tool_config={"type": "image_generation", "quality": "low"},
-        )
-    ],
+            #    tools=[
+        #ImageGenerationTool(
+        #    tool_config={"type": "image_generation", "quality": "low"},
+        #)
+    #],
             instructions=instructions,  
             
             
@@ -234,6 +232,20 @@ async def _make_ui_block(series: list[int], labels: list[str], last_val, stamp, 
     # Branding if missing
     if "EventTalks" not in ui:
         ui += '<div class="text-xs text-center text-gray-400 mt-3">Powered by EventTalks 🏒🌍</div>'
+    
+    
+    # Fallback: if no QuickChart chart was rendered, show local happy_bike.png
+    # (QuickChart embeds an <img src="https://quickchart.io"…>, so we check for that)
+    if "quickchart.io" not in ui:
+       ui += """
+       <div class="mt-4 text-center">
+         <img src="\\\\wsl.localhost\\Ubuntu\\home\\nata\\DataTalks\\happy_bike.png"
+              alt="Happy bike"
+              style="max-width:100%;height:auto;">
+       </div>
+       """
+    
+    
     log.info("parking widget: %s", ui)
     return ui
 
