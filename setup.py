@@ -1,6 +1,7 @@
 from pkg_resources import parse_version
 from configparser import ConfigParser
-import setuptools, shlex
+import setuptools
+import shlex
 assert parse_version(setuptools.__version__)>=parse_version('36.2')
 
 # note: all settings are in settings.ini; edit there, not here
@@ -10,7 +11,8 @@ cfg = config['DEFAULT']
 
 cfg_keys = 'version description keywords author author_email'.split()
 expected = cfg_keys + "lib_name user branch license status min_python audience language".split()
-for o in expected: assert o in cfg, "missing expected setting: {}".format(o)
+for o in expected:
+    assert o in cfg, "missing expected setting: {}".format(o)
 setup_cfg = {o:cfg[o] for o in cfg_keys}
 
 licenses = {
@@ -25,7 +27,8 @@ statuses = [ '1 - Planning', '2 - Pre-Alpha', '3 - Alpha',
 py_versions = '3.6 3.7 3.8 3.9 3.10 3.11 3.12'.split()
 
 requirements = shlex.split(cfg.get('requirements', ''))
-if cfg.get('pip_requirements'): requirements += shlex.split(cfg.get('pip_requirements', ''))
+if cfg.get('pip_requirements'):
+    requirements += shlex.split(cfg.get('pip_requirements', ''))
 min_python = cfg['min_python']
 lic = licenses.get(cfg['license'].lower(), (cfg['license'], None))
 dev_requirements = (cfg.get('dev_requirements') or '').split()

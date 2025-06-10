@@ -1,0 +1,14 @@
+nbdev==2.4.2
+fastmcp==2.5.1
+uvicorn[standard]==0.34.2
+fastapi==0.115.12
+python-fasthtml==0.12.18
+httpx==0.28.1
+polyline==2.0.2
+sse-starlette==2.3.5
+pydantic==2.11.5
+python-dateutil==2.9.0.post0
+openai-agents==0.0.16
+openai-agents-mcp==0.0.8
+monsterui==1.0.21
+pillow
