@@ -59,7 +59,7 @@ async def parking_camera_loop(q, sse_helper) -> None:
     """Send a Gen-UI block every 180 s with an updated chart."""
     global last_val                         # start full
     while True:
-        delta      = random.randint(30, 50)  # random drop 30-50
+        delta      = random.randint(50, 100)  # random drop 30-50
         last_val   = max(last_val - delta, 0)
         stamp      = dt.datetime.now().strftime("%H:%M:%S")
 
@@ -75,7 +75,7 @@ async def parking_camera_loop(q, sse_helper) -> None:
                        f'<div hx-swap-oob="beforeend:#tool-log">{html}</div>')
         )
     ),
-    timeout=120
+    timeout=180
 )
 
         except Exception as exc:
@@ -85,22 +85,22 @@ async def parking_camera_loop(q, sse_helper) -> None:
                         f'class="alert alert-error">⚠ parking widget error – {exc}</div>'
                     )
         await q.put(sse_helper("message", ui_block))
-        await asyncio.sleep(180)          # 3-min cadence
+        await asyncio.sleep(60)          # 3-min cadence
 
 # %% ../nbs/08_camera_talk.ipynb 4
 #| eval: false
 import json
 from typing import Callable
+from agents import ImageGenerationTool
+from openai.types.responses.tool import ImageGeneration
 
 async def _make_ui_block(series: list[int], labels: list[str], last_val, stamp, push_tool: Callable[[str], None]) -> str:
     """
     Generates a full GenUI HTML card via LLM using weather + parking.
     Ensures booking buttons and branding are always present.
     """
-    async with MCPServerSse(name="ui", params={"url": MCP_URL}, client_session_timeout_seconds=300) as srv:
-
-        # Prepare chart config dictionary and convert to JSON
-        chart_config = {
+            # Prepare chart config dictionary and convert to JSON
+    chart_config = {
             "chartConfig": {
                 "type": "line",
                 "data": {
@@ -133,9 +133,9 @@ async def _make_ui_block(series: list[int], labels: list[str], last_val, stamp, 
         }
 
         # Serialize to JSON with correct JS booleans
-        chart_config_json = json.dumps(chart_config, indent=2)
-        escaped_json = chart_config_json.replace("{", "{{").replace("}", "}}")
-
+    chart_config_json = json.dumps(chart_config, indent=2)
+    escaped_json = chart_config_json.replace("{", "{{").replace("}", "}}")
+    async with MCPServerSse(name="ui", params={"url": MCP_URL}, client_session_timeout_seconds=300) as srv:
 
         instructions = f"""
         🎨 You are EcoGen, a generative-UI designer.
@@ -157,18 +157,7 @@ async def _make_ui_block(series: list[int], labels: list[str], last_val, stamp, 
         {escaped_json}
         ```
 
-        2b. If **{last_val} == 0** → **instead** call
-            `image_gen.generate_image` with a playful prompt, e.g.  
-            `"a cheerful cyclist splashing through a Helsinki rain shower, flat illustration, bright colours"`.  
-            The tool returns an `ImageContent` object whose `.url` field is the direct PNG/JPG.  
-            Embed it like:
-
-            ```html
-            <img class="w-full rounded-lg mt-4"
-                 src="https://actual-image-url.png"
-                 alt="Try a bike or bus!">
-            ```
-
+        2b. If {last_val} == 0 create nice image with ImageGenerationTool about hapy bike or happy walker or happy public transport user flying to Metro Areena stadion and warp it in to the final card properly.
             
 
         3. Compose one HTML block wrapped in
@@ -182,7 +171,7 @@ async def _make_ui_block(series: list[int], labels: list[str], last_val, stamp, 
         • A fun heading with an emoji  
         • Weather summary and your funny comment  
         • Parking status line, e.g. `🚗 {last_val} free slots`  
-        • Chart *or* generated image, per the branch above  
+        
         • A friendly encouragement paragraph to use bike or public transport  
         • Exactly three booking buttons, linking to:
           – CityBikes(HSL) → https://kaupunkipyorat.hsl.fi/en  
@@ -199,19 +188,31 @@ async def _make_ui_block(series: list[int], labels: list[str], last_val, stamp, 
         Rules:
         • HTML only – no Markdown, no JSON.  
         • Produce a single response; do not send drafts.  
-        • Missing any mandatory element ⇒ response rejected.
+        
         """
-
-
+        
+        
+        
         agent = Agent(
             name="EcoGen Agent",
-            model="o4-mini",
+            model="o3",
             mcp_servers=[srv],
-            instructions=instructions,
+            #handoffs=[agent_image_generation],
+                tools=[
+        ImageGenerationTool(
+            tool_config={"type": "image_generation", "quality": "low"},
+        )
+    ],
+            instructions=instructions,  
+            
+            
         )
 
         hook = ToolChatHook(push_tool)      
         res  = await Runner.run(agent, input="", hooks=hook)
+        
+        log.info("Agent UI raw output: %s", res.final_output)
+
         ui = res.final_output.strip()
         
         
@@ -233,7 +234,7 @@ async def _make_ui_block(series: list[int], labels: list[str], last_val, stamp, 
     # Branding if missing
     if "EventTalks" not in ui:
         ui += '<div class="text-xs text-center text-gray-400 mt-3">Powered by EventTalks 🏒🌍</div>'
-
+    log.info("parking widget: %s", ui)
     return ui
 
 

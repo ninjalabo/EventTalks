@@ -454,7 +454,7 @@ async def _start_run(run_id: str, prompt_html: str):
             name         = "Main Agent",
             instructions = mainAgent_instruction,
             mcp_servers  = [srv],
-            model        = "o4-mini",
+            model        = "o3",
         )
         hook = ToolChatHook(push_tool)
         res  = await Runner.run(agent, prompt_html, hooks=hook)
